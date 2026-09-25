@@ -16,6 +16,7 @@ Bộ tài liệu này mở rộng SRS hiện tại theo hướng **trợ lý h�
 6. Thiết kế đủ tổng quát để thay provider/model mà không sửa toàn bộ nghiệp vụ.
 
 ## Tài liệu
+- [`PHAN_CONG_NHOM.md`](PHAN_CONG_NHOM.md): tài liệu ownership chính thức của 3 thành viên và ranh giới trách nhiệm DeepTutor, LMS/Moodle, AI.
 - `01-system-overview.md`: phạm vi, kiến trúc, actors, use cases, ưu tiên.
 - `02-ai-multi-llm-fallback.md`: DeepSeek + fallback, retry, quota, token/context.
 - `03-quiz-assessment.md`: sinh quiz, làm bài, chấm điểm, giải thích câu sai.
