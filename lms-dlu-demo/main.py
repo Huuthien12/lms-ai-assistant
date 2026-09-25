@@ -13,6 +13,9 @@ import os
 import shutil
 import subprocess
 import json
+import sys
+
+from pathlib import Path
 
 from typing import Optional
 
@@ -50,6 +53,13 @@ BASE_DIR = os.path.dirname(
 )
 
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from deeptutor_integration import DeepTutorConfig, DeepTutorService
+from deeptutor_integration.api import create_router as create_deeptutor_router
+from deeptutor_integration.contracts import DocumentInput, QueryInput
+
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 UPLOAD_DIR = os.path.abspath(
@@ -81,20 +91,12 @@ ODBC_DRIVER = os.getenv(
 # 5. DEEPTUTOR CONFIG
 # ==============================================================================
 
-DEEPTUTOR_DIR = os.path.abspath(
-    os.getenv("DEEPTUTOR_DIR")
-    or os.path.join(PROJECT_ROOT, "DeepTutor")
-)
+DEEPTUTOR_CONFIG = DeepTutorConfig.from_env(Path(PROJECT_ROOT))
+DEEPTUTOR_SERVICE = DeepTutorService(DEEPTUTOR_CONFIG)
+DEEPTUTOR_DIR = str(DEEPTUTOR_CONFIG.deeptutor_dir)
+DEEPTUTOR_EXE = str(DEEPTUTOR_CONFIG.executable)
 
-DEEPTUTOR_EXE = os.path.abspath(
-    os.getenv("DEEPTUTOR_EXE")
-    or os.path.join(
-        DEEPTUTOR_DIR,
-        ".venv",
-        "Scripts",
-        "deeptutor.exe"
-    )
-)
+app.include_router(create_deeptutor_router(DEEPTUTOR_SERVICE))
 
 
 # ==============================================================================
@@ -852,6 +854,47 @@ def ask_deeptutor(
         "session_id": session_id,
         "kb_name": kb_name,
         "sources": clean_sources
+    }
+
+
+# Compatibility boundary for the existing LMS callers. DeepTutor process and
+# knowledge-base behavior is owned by the isolated integration package above.
+def get_kb_name(course_id: str) -> str:
+    return DEEPTUTOR_SERVICE.kb_name(course_id)
+
+
+def index_document_to_deeptutor(course_id: str, document_path: str):
+    path = Path(document_path)
+    return DEEPTUTOR_SERVICE.ingest_document(
+        DocumentInput(
+            document_id=path.stem,
+            course_id=course_id,
+            filename=path.name,
+            path=str(path),
+            source="lms-demo",
+        )
+    )
+
+
+def ask_deeptutor(course_id: str, message: str):
+    query_result = DEEPTUTOR_SERVICE.query(
+        QueryInput(course_id=course_id, question=message)
+    )
+    result = query_result["result"]
+    response = (
+        result.get("response")
+        or result.get("answer")
+        or result.get("content")
+        or result.get("text")
+    )
+    if not isinstance(response, str) or not response.strip():
+        raise RuntimeError("DeepTutor returned no textual response.")
+    sources = result.get("sources") or result.get("documents") or []
+    return {
+        "response": response,
+        "session_id": result.get("session_id"),
+        "kb_name": query_result["kb_id"],
+        "sources": sources if isinstance(sources, list) else [],
     }
 
 
@@ -1808,7 +1851,8 @@ def get_chat_history(
 # ==============================================================================
 
 @app.get(
-    "/deeptutor/status"
+    "/deeptutor/legacy-status",
+    deprecated=True
 )
 def deeptutor_status():
 

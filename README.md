@@ -20,6 +20,8 @@ docs/            SRS and supporting project documentation
 
 The current requirements source of truth is [`docs/SRS.md`](docs/SRS.md) together with the topic files under [`docs/srs/`](docs/srs/).
 
+The stable DeepTutor runtime and knowledge-base boundary is documented in [`docs/deeptutor-integration.md`](docs/deeptutor-integration.md).
+
 ## Clone and initialize
 
 Clone with the DeepTutor submodule:
