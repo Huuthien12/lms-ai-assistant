@@ -1,0 +1,8 @@
+fastapi
+pydantic
+pyodbc
+python-dotenv
+python-multipart
+requests
+streamlit
+uvicorn

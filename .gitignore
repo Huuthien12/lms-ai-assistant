@@ -1,0 +1,93 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.*
+secrets.*
+!.secrets.baseline
+**/.streamlit/secrets.toml
+
+# Python bytecode, caches, and environments
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.venv/
+venv/
+env/
+ENV/
+**/.venv/
+**/venv/
+
+# Packaging and generated metadata
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDE, OS, logs, and temporary files
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.backup
+*.swp
+*.swo
+*~
+
+# Local databases and dumps
+*.db
+*.sqlite
+*.sqlite3
+*.bkp
+*.dump
+*.sql.gz
+
+# LMS runtime data
+lms-dlu-demo/uploads/
+lms-dlu-demo/logs/
+lms-dlu-demo/tmp/
+lms-dlu-demo/data/
+lms-dlu-demo/kb/
+lms-dlu-demo/knowledge_bases/
+lms-dlu-demo/vector_db/
+lms-dlu-demo/chroma/
+lms-dlu-demo/faiss/
+**/*.faiss
+**/chroma.sqlite3
+
+# DeepTutor runtime state (also covered by the submodule's own ignore rules)
+DeepTutor/data/
+DeepTutor/multi-user/
+DeepTutor/run_code_workspace/
+DeepTutor/output/
+DeepTutor/outputs/
+DeepTutor/cache/
+
+# Frontend dependencies and build output
+node_modules/
+**/node_modules/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
