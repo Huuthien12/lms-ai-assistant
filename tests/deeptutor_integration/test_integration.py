@@ -94,6 +94,67 @@ class DeepTutorIntegrationTests(unittest.TestCase):
             with self.assertRaises(DeepTutorError) as raised: self.make_service(root).ingest_document(request)
             self.assertEqual(raised.exception.code, "invalid_document")
 
+    def test_ingest_moodle_document_stages_pdf_and_preserves_contract(self):
+        with TemporaryDirectory() as tmp:
+            service = self.make_service(Path(tmp))
+            normalized = {
+                "course_id": "INT1339", "document_id": "42", "filename": "functions.pdf",
+                "mime_type": "application/pdf", "source": "moodle",
+                "metadata": {
+                    "course_name": "Python", "moodle_file_size": 4,
+                    "token": "secret", "download_url": "https://moodle.example/private.pdf",
+                },
+                "token": "secret", "download_url": "https://moodle.example/private.pdf",
+            }
+            captured = []
+
+            def ingest(document):
+                path = Path(document.path)
+                self.assertTrue(path.is_file())
+                self.assertTrue(path.is_relative_to(service.config.runtime_dir.resolve()))
+                self.assertTrue(path.is_relative_to(service.config.repository_root.resolve()))
+                self.assertEqual(path.suffix, ".pdf")
+                self.assertEqual(path.read_bytes(), b"%PDF")
+                captured.append(document)
+                return {"status": "ready"}
+
+            with patch.object(service, "ingest_document", side_effect=ingest) as delegated:
+                self.assertEqual(service.ingest_moodle_document(normalized, b"%PDF", kb_id="int1339-python"), {"status": "ready"})
+            delegated.assert_called_once()
+            document = captured[0]
+            self.assertEqual((document.document_id, document.course_id, document.filename, document.kb_id),
+                             ("42", "INT1339", "functions.pdf", "int1339-python"))
+            self.assertEqual(document.metadata, {"course_name": "Python", "moodle_file_size": 4})
+            self.assertNotIn("token", document.model_dump())
+            self.assertNotIn("download_url", document.model_dump())
+            self.assertFalse(Path(document.path).exists())
+
+    def test_ingest_moodle_document_rejects_invalid_bytes(self):
+        with TemporaryDirectory() as tmp:
+            service = self.make_service(Path(tmp))
+            normalized = {"course_id": "c", "document_id": "d", "filename": "document.pdf"}
+            for value in (None, b"", "not bytes"):
+                with self.assertRaisesRegex(DeepTutorError, "PDF content"):
+                    service.ingest_moodle_document(normalized, value)  # type: ignore[arg-type]
+
+    def test_ingest_moodle_document_cleans_up_after_ingestion_failure(self):
+        with TemporaryDirectory() as tmp:
+            service = self.make_service(Path(tmp))
+            captured_path = None
+
+            def fail(document):
+                nonlocal captured_path
+                captured_path = Path(document.path)
+                self.assertTrue(captured_path.is_file())
+                raise DeepTutorError("cli_failed", "CLI failed", status_code=502)
+
+            normalized = {"course_id": "c", "document_id": "d", "filename": "document.pdf"}
+            with patch.object(service, "ingest_document", side_effect=fail):
+                with self.assertRaisesRegex(DeepTutorError, "CLI failed"):
+                    service.ingest_moodle_document(normalized, b"%PDF")
+            self.assertIsNotNone(captured_path)
+            self.assertFalse(captured_path.exists())
+
     def test_router_contract(self):
         with TemporaryDirectory() as tmp:
             router = create_router(self.make_service(Path(tmp)))

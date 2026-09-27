@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from .adapter import CliDeepTutorAdapter, DeepTutorAdapter
 from .config import DeepTutorConfig
@@ -93,6 +95,71 @@ class DeepTutorService:
             "status": final_info.get("status"),
             "metadata": document.metadata,
         }
+
+    def ingest_moodle_document(
+        self,
+        normalized_doc: Mapping[str, Any],
+        pdf_bytes: bytes | bytearray | memoryview,
+        *,
+        kb_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Ingest LMS-normalized PDF bytes without coupling to an LMS adapter."""
+        if not isinstance(normalized_doc, Mapping):
+            raise DeepTutorError("invalid_document", "Normalized document must be a mapping.", status_code=422)
+        if not isinstance(pdf_bytes, (bytes, bytearray, memoryview)) or not pdf_bytes:
+            raise DeepTutorError("invalid_document", "PDF content must be non-empty bytes.", status_code=422)
+
+        filename = normalized_doc.get("filename")
+        if not isinstance(filename, str) or Path(filename).suffix.lower() != ".pdf":
+            raise DeepTutorError("unsupported_document", "Moodle document must be a PDF.", status_code=415)
+        metadata = normalized_doc.get("metadata", {})
+        if not isinstance(metadata, Mapping):
+            raise DeepTutorError("invalid_document", "Document metadata must be a mapping.", status_code=422)
+        safe_metadata = {
+            key: value for key, value in metadata.items()
+            if not any(marker in str(key).lower() for marker in ("token", "auth", "url", "password", "secret"))
+        }
+
+        runtime_dir = self.config.runtime_dir.resolve()
+        if not runtime_dir.is_relative_to(self.config.repository_root.resolve()):
+            raise DeepTutorError("invalid_document", "Runtime directory must be inside the project workspace.", status_code=422)
+        staging_dir = runtime_dir / "moodle-documents"
+        try:
+            staging_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise DeepTutorError("document_staging_failed", "Unable to prepare PDF staging directory.") from exc
+        staged_path = staging_dir / f"{uuid4().hex}.pdf"
+        document = DocumentInput(
+            document_id=normalized_doc.get("document_id"),
+            course_id=normalized_doc.get("course_id"),
+            filename=filename,
+            mime_type=normalized_doc.get("mime_type"),
+            source=normalized_doc.get("source", "unknown"),
+            metadata=safe_metadata,
+            path=str(staged_path),
+            kb_id=kb_id,
+        )
+        try:
+            with staged_path.open("xb") as staged_file:
+                staged_file.write(bytes(pdf_bytes))
+        except OSError as exc:
+            staged_path.unlink(missing_ok=True)
+            raise DeepTutorError("document_staging_failed", "Unable to stage PDF document.") from exc
+
+        ingestion_error: Exception | None = None
+        try:
+            return self.ingest_document(document)
+        except Exception as exc:
+            ingestion_error = exc
+            raise
+        finally:
+            try:
+                staged_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                if ingestion_error is None:
+                    raise DeepTutorError("document_cleanup_failed", "Unable to remove staged PDF document.") from exc
 
     def create_knowledge_base(self, request: KnowledgeBaseInput) -> dict[str, Any]:
         kb_id = self.kb_name(request.course_id, request.kb_id)
