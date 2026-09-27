@@ -5,80 +5,99 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class MoodleAdapter:
-    def __init__(self):
-        self.base_url = os.getenv("MOODLE_BASE_URL")
-        self.token = os.getenv("MOODLE_TOKEN")
-        self.rest_endpoint = f"{self.base_url}/webservice/rest/server.php"
+    def __init__(self, base_url: str = None, token: str = None):
+        self.base_url = base_url or os.getenv("MOODLE_BASE_URL")
+        self.token = token or os.getenv("MOODLE_TOKEN")
+
+        if not self.base_url or not self.token:
+            raise ValueError("MOODLE_BASE_URL và MOODLE_TOKEN phải được cấu hình.")
+
+        self.rest_endpoint = f"{self.base_url.rstrip('/')}/webservice/rest/server.php"
 
     def _call_ws(self, function_name, **kwargs):
-        """Hàm dùng chung để gọi Moodle Web Service"""
+        """Hàm dùng chung để gọi Moodle Web Service với timeout và bắt lỗi HTTP/JSON."""
         params = {
             "wstoken": self.token,
             "wsfunction": function_name,
             "moodlewsrestformat": "json"
         }
         params.update(kwargs)
-        response = requests.get(self.rest_endpoint, params=params)
-        return response.json()
+
+        try:
+            response = requests.get(self.rest_endpoint, params=params, timeout=15)
+            response.raise_for_status()
+        except requests.RequestException as e:
+            raise RuntimeError("Lỗi HTTP khi gọi Moodle Web Service.") from e
+
+        try:
+            data = response.json()
+        except ValueError:
+            raise RuntimeError("Định dạng dữ liệu trả về từ Moodle không hợp lệ (không phải JSON).")
+
+        if isinstance(data, dict) and ("exception" in data or "errorcode" in data):
+            err_msg = data.get("message", data.get("errorcode", "Lỗi Moodle không xác định"))
+            raise RuntimeError(f"Moodle Web Service error: {err_msg}")
+
+        return data
 
     def get_normalized_document(self, course_id_moodle, resource_id):
         """
-        Lấy thông tin file, download và chuẩn hóa theo Contract.
-        course_id_moodle: ID của khóa học trên hệ thống (của bạn là 9)
-        resource_id: ID của tài nguyên file PDF
+        Lấy thông tin file, download và chuẩn hóa metadata.
+        course_id_moodle: ID của khóa học trên hệ thống
+        resource_id: ID của tài nguyên file
         """
-        # 1. Lấy thông tin khóa học (để lấy shortname và fullname)
+        # 1. Lấy thông tin khóa học
         courses = self._call_ws("core_course_get_courses", **{"options[ids][0]": course_id_moodle})
-        if not courses:
-            raise Exception("Không tìm thấy khóa học")
+        if not courses or not isinstance(courses, list):
+            raise RuntimeError("Không tìm thấy khóa học hoặc dữ liệu khóa học không hợp lệ")
         course_info = courses[0]
 
         # 2. Lấy danh sách tài nguyên của khóa học
-        resources = self._call_ws("mod_resource_get_resources_by_courses", **{"courseids[0]": course_id_moodle})
-        
-        # Tìm file có resource_id tương ứng
+        resources_resp = self._call_ws("mod_resource_get_resources_by_courses", **{"courseids[0]": course_id_moodle})
+        resources = resources_resp.get("resources", []) if isinstance(resources_resp, dict) else []
+
+        # 3. Tìm tài liệu tương ứng và kiểm tra an toàn contentfiles
         target_file = None
-        for res in resources.get("resources", []):
-            if res["id"] == resource_id:
-                target_file = res["contentfiles"][0] # Lấy file đầu tiên trong resource
+        for res in resources:
+            if res.get("id") == resource_id:
+                contentfiles = res.get("contentfiles", [])
+                if contentfiles and isinstance(contentfiles, list) and len(contentfiles) > 0:
+                    target_file = contentfiles[0]
                 break
-                
+
         if not target_file:
-            raise Exception("Không tìm thấy tài liệu")
+            raise RuntimeError(f"Không tìm thấy tài liệu (resource_id={resource_id}) hoặc file đính kèm bị rỗng/thiếu")
 
-        # 3. Download file PDF (dạng bytes)
-        fileurl = target_file["fileurl"]
+        # 4. Lấy link và tải byte của file PDF
+        fileurl = target_file.get("fileurl")
+        if not fileurl:
+            raise RuntimeError("Không tìm thấy đường dẫn tải file (fileurl) trong dữ liệu Moodle")
+
         download_url = f"{fileurl}?token={self.token}"
-        pdf_response = requests.get(download_url)
-        pdf_bytes = pdf_response.content 
+        try:
+            pdf_response = requests.get(download_url, timeout=30)
+            pdf_response.raise_for_status()
+        except requests.RequestException as e:
+            raise RuntimeError("Lỗi HTTP khi tải file PDF từ Moodle.") from e
 
-        # 4. Chuẩn hóa dữ liệu theo Contract chung
+        pdf_bytes = pdf_response.content
+
+        # Ngăn chặn trường hợp file rỗng hoặc bị chuyển hướng sang trang lỗi HTML
+        content_type = pdf_response.headers.get("Content-Type", "")
+        if not pdf_bytes or content_type.startswith("text/html"):
+            raise RuntimeError("Dữ liệu tải về không hợp lệ (không phải file PDF, có thể do lỗi xác thực).")
+
+        # 5. Chuẩn hóa metadata (Loại bỏ token và các URL tải mạng, KHÔNG gán path)
         normalized_doc = {
-            "course_id": course_info["shortname"], 
-            "document_id": str(resource_id),       
-            "filename": target_file["filename"],   
-            "mime_type": target_file["mimetype"],  
+            "course_id": str(course_info.get("shortname", course_id_moodle)),
+            "document_id": str(resource_id),
+            "filename": target_file.get("filename", "document.pdf"),
+            "mime_type": target_file.get("mimetype", "application/pdf"),
             "source": "moodle",
             "metadata": {
-                "course_name": course_info["fullname"] 
-            },
-            "path": download_url 
+                "course_name": course_info.get("fullname", ""),
+                "moodle_file_size": target_file.get("filesize", 0)
+            }
         }
 
         return normalized_doc, pdf_bytes
-
-# --- PHẦN CHẠY TEST ---
-if __name__ == "__main__":
-    adapter = MoodleAdapter()
-    
-    # Chạy thử hàm với ID khóa học = 9, ID tài nguyên = 1 (bạn thay số 1 bằng ID thực tế của Chuong 1.pdf nếu khác)
-    doc_meta, pdf_data = adapter.get_normalized_document(course_id_moodle=9, resource_id=1)
-
-    print("--- KẾT QUẢ CHUẨN HÓA (CONTRACT) ---")
-    print(doc_meta)
-    print(f"\nKích thước file tải về: {len(pdf_data)} bytes")
-
-    # Lưu thử file ra máy để kiểm chứng
-    with open(doc_meta["filename"], "wb") as f:
-        f.write(pdf_data)
-    print(f"Đã lưu thành công file {doc_meta['filename']} vào thư mục hiện tại để kiểm tra!")
