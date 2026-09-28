@@ -12,15 +12,24 @@ class GroundedChatService:
         self.orchestrator = orchestrator
 
     async def chat(self, user_query: str, context_documents: List[str], system_prompt: Optional[str] = None, **kwargs: Any) -> LLMResult:
-        """Thực hiện sinh câu trả lời dựa trên truy vấn của người dùng và các tài liệu ngữ cảnh được cung cấp."""
-        if not user_query:
-            raise ValueError("Truy vấn của người dùng (user_query) không được để trống.")
+        """Thực hiện sinh câu trả lời học tập thông minh dựa trên ngữ cảnh DeepTutor/KB."""
         
-        # Chuẩn hóa context từ danh sách tài liệu
-        formatted_context = "\n\n".join([f"- {doc}" for doc in context_documents]) if context_documents else "Không có tài liệu ngữ cảnh cụ thể."
+        if not context_documents or len(context_documents) == 0:
+            # Xử lý trường hợp không có ngữ cảnh để chống hallucination
+            return LLMResult(
+                status="success",
+                provider="grounded_chat_guard",
+                model="guardrail",
+                content="Xin lỗi, tôi không tìm thấy tài liệu hoặc ngữ cảnh phù hợp trong hệ thống để trả lời câu hỏi này.",
+                latency_ms=0.0,
+                error_code=None,
+                fallback_used=False
+            )
+
+        formatted_context = "\n\n---\n\n".join(context_documents)
         
         default_system_prompt = (
-            "Bạn là trợ lý AI học tập thông minh cho hệ thống LMS. "
+            "Bạn là trợ lý AI học tập thông minh của hệ thống LMS. "
             "Hãy trả lời câu hỏi của học viên dựa TRỰC TIẾP vào các tài liệu ngữ cảnh được cung cấp bên dưới. "
             "Nếu thông tin không có trong ngữ cảnh, hãy thừa nhận bạn không biết và không bịa đặt thêm.\n\n"
             f"Ngữ cảnh tài liệu:\n{formatted_context}"
