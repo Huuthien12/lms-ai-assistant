@@ -1,6 +1,6 @@
-import logging
 import json
-from typing import Optional, Dict, Any, List
+import logging
+from typing import Dict, Any, List, Optional
 from backend.services.ai.orchestrator import AIOrchestrator
 from backend.services.ai.provider_base import LLMResult
 
@@ -12,73 +12,82 @@ class FlashcardService:
             raise ValueError("FlashcardService yêu cầu AIOrchestrator.")
         self.orchestrator = orchestrator
 
-    async def generate_flashcards(self, topic_or_text: str, count: int = 5, difficulty: str = "medium", **kwargs: Any) -> LLMResult:
-        """Tạo danh sách các flashcard (mặt trước / mặt sau) từ nội dung hoặc chủ đề học tập với structured validation."""
-        if not topic_or_text:
-            raise ValueError("topic_or_text không được để trống.")
-
-        system_prompt = (
-            "Bạn là trợ lý AI chuyên thiết kế học liệu flashcard cho hệ thống LMS. "
-            "Hãy trả về kết quả dưới định dạng JSON hợp lệ bao gồm danh sách các flashcard. "
-            "Mỗi flashcard phải có khóa 'front' (thuật ngữ hoặc câu hỏi ngắn gọn), 'back' (định nghĩa hoặc câu trả lời), "
-            "và 'difficulty' (độ khó tương ứng)."
-        )
-
-        prompt = (
-            f"Hãy tạo {count} flashcard ôn tập về nội dung hoặc chủ đề sau: '{topic_or_text}' "
-            f"với mức độ khó '{difficulty}'. "
-            "Đảm bảo đầu ra là định dạng JSON có khóa 'flashcards' chứa danh sách các thẻ."
-        )
-
-        result = await self.orchestrator.generate(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            **kwargs
-        )
-
-        if result.status != "success":
-            return result
-
-        # Thực hiện structured validation cho flashcards
+    def validate_and_parse_flashcards(self, raw_content: str) -> Dict[str, Any]:
+        """Validate và parse cấu trúc flashcards từ raw content của LLM."""
         try:
-            parsed_content = json.loads(result.content)
-            
-            if not isinstance(parsed_content, dict) or "flashcards" not in parsed_content:
-                if isinstance(parsed_content, list):
-                    parsed_content = {"flashcards": parsed_content}
-                else:
-                    raise ValueError("JSON không đúng schema flashcards.")
-
-            cards = parsed_content.get("flashcards", [])
-            if not isinstance(cards, list):
-                raise ValueError("Khóa 'flashcards' phải là một danh sách.")
-
-            validated_cards = []
-            for card in cards:
-                if not isinstance(card, dict) or "front" not in card or "back" not in card:
-                    continue
-                validated_cards.append({
-                    "front": str(card.get("front", "")).strip(),
-                    "back": str(card.get("back", "")).strip(),
-                    "difficulty": card.get("difficulty", difficulty)
-                })
-
-            if len(validated_cards) == 0:
-                raise ValueError("Không có flashcard nào hợp lệ sau khi validate.")
-
-            parsed_content["flashcards"] = validated_cards
-            result.content = json.dumps(parsed_content, ensure_ascii=False)
-
+            if isinstance(raw_content, dict):
+                data = raw_content
+            else:
+                cleaned = raw_content.strip()
+                if cleaned.startswith("```json"):
+                    cleaned = cleaned[7:]
+                if cleaned.startswith("```"):
+                    cleaned = cleaned[3:]
+                if cleaned.endswith("```"):
+                    cleaned = cleaned[:-3]
+                data = json.loads(cleaned.strip())
         except Exception as e:
-            logger.error(f"Flashcard validation lỗi: {str(e)}")
-            return LLMResult(
-                status="error",
-                provider=result.provider,
-                model=result.model,
-                content=f"Lỗi cấu trúc dữ liệu Flashcard: {str(e)}",
-                latency_ms=result.latency_ms,
-                error_code="INVALID_FLASHCARD_SCHEMA",
-                fallback_used=result.fallback_used
+            raise ValueError(f"INVALID_FLASHCARD_SCHEMA: Không thể parse JSON: {str(e)}")
+
+        if not isinstance(data, dict) or "flashcards" not in data:
+            raise ValueError("INVALID_FLASHCARD_SCHEMA: Dữ liệu phải chứa khóa 'flashcards'.")
+
+        cards = data.get("flashcards")
+        if not isinstance(cards, list) or len(cards) == 0:
+            raise ValueError("INVALID_FLASHCARD_SCHEMA: Khóa 'flashcards' phải là list không rỗng.")
+
+        validated_cards = []
+        for card in cards:
+            if not isinstance(card, dict):
+                raise ValueError("INVALID_FLASHCARD_SCHEMA: Mỗi flashcard phải là một dictionary.")
+
+            front = card.get("front_text") or card.get("front")
+            back = card.get("back_text") or card.get("back")
+
+            if not front or not isinstance(front, str) or not front.strip():
+                raise ValueError("INVALID_FLASHCARD_SCHEMA: front_text không được rỗng.")
+            if not back or not isinstance(back, str) or not back.strip():
+                raise ValueError("INVALID_FLASHCARD_SCHEMA: back_text không được rỗng.")
+
+            validated_card = {
+                "front_text": front.strip(),
+                "back_text": back.strip(),
+                "topic": card.get("topic", "General"),
+                "difficulty": card.get("difficulty", "medium")
+            }
+            if "source_metadata" in card and card["source_metadata"]:
+                validated_card["source_metadata"] = card["source_metadata"]
+
+            validated_cards.append(validated_card)
+
+        return {"flashcards": validated_cards}
+
+    async def generate_flashcards(self, prompt_text: str, source_metadata: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
+        """Tạo flashcards thông qua LLM orchestrator, validate schema và bảo toàn source_metadata thực tế."""
+        system_prompt = (
+            "Bạn là trợ lý AI chuyên tạo flashcard học tập cho LMS. "
+            "Hãy trả về kết quả JSON hợp lệ chứa danh sách flashcards gồm front_text, back_text, topic, difficulty."
+        )
+
+        try:
+            llm_result = await self.orchestrator.generate(
+                prompt=prompt_text,
+                system_prompt=system_prompt,
+                **kwargs
             )
 
-        return result
+            if llm_result.status != "success":
+                raise ValueError(f"LLM generation failed: {llm_result.error_code}")
+
+            parsed_data = self.validate_and_parse_flashcards(llm_result.content)
+        except Exception as e:
+            if "INVALID_FLASHCARD_SCHEMA" in str(e):
+                raise e
+            raise ValueError(f"INVALID_FLASHCARD_SCHEMA: {str(e)}")
+
+        if source_metadata:
+            for card in parsed_data["flashcards"]:
+                if "source_metadata" not in card:
+                    card["source_metadata"] = source_metadata
+
+        return parsed_data

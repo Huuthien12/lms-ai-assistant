@@ -1,54 +1,72 @@
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
+from backend.services.ai.fallback_provider import FallbackAIProvider
 from backend.services.ai.provider_base import LLMResult
-from backend.services.ai.fallback_provider import FallbackLLMProvider
-from backend.services.ai.orchestrator import AIOrchestrator
+
+@pytest.fixture
+def mock_primary():
+    return MagicMock()
+
+@pytest.fixture
+def mock_fallback():
+    return MagicMock()
 
 @pytest.mark.asyncio
-async def test_fallback_success_on_primary():
-    primary = AsyncMock()
-    primary.generate.return_value = LLMResult(
-        status="success", provider="deepseek", model="chat", content="Primary response", latency_ms=100
-    )
-    fallback = AsyncMock()
-    
-    fp = FallbackLLMProvider(primary_provider=primary, fallback_provider=fallback)
-    result = await fp.generate("Hello")
-    
-    assert result.status == "success"
-    assert result.content == "Primary response"
-    assert result.fallback_used is False
-    fallback.generate.assert_not_called()
+async def test_primary_success(mock_primary, mock_fallback):
+    mock_primary.generate = AsyncMock(return_value=LLMResult(
+        status="success", provider="primary", model="m1", content="Primary OK", latency_ms=10.0
+    ))
+    provider = FallbackAIProvider(mock_primary, mock_fallback)
+    res = await provider.generate("test prompt")
+
+    assert res.status == "success"
+    assert res.content == "Primary OK"
+    mock_fallback.generate.assert_not_called()
 
 @pytest.mark.asyncio
-async def test_fallback_triggers_on_primary_error():
-    primary = AsyncMock()
-    primary.generate.return_value = LLMResult(
-        status="error", provider="deepseek", model="chat", content="", latency_ms=100, error_code="HTTP_500"
-    )
-    
-    fallback = AsyncMock()
-    fallback.generate.return_value = LLMResult(
-        status="success", provider="openai", model="gpt-4", content="Fallback response", latency_ms=200
-    )
-    
-    fp = FallbackLLMProvider(primary_provider=primary, fallback_provider=fallback)
-    result = await fp.generate("Hello")
-    
-    assert result.status == "success"
-    assert result.content == "Fallback response"
-    assert result.fallback_used is True
-    fallback.generate.assert_awaited_once()
+@pytest.mark.parametrize("err_code", ["HTTP_429", "HTTP_500", "HTTP_503", "TIMEOUT_OR_NETWORK_ERROR"])
+async def test_retryable_errors_trigger_fallback(mock_primary, mock_fallback, err_code):
+    mock_primary.generate = AsyncMock(return_value=LLMResult(
+        status="error", provider="primary", model="m1", content="Error", error_code=err_code, latency_ms=10.0
+    ))
+    mock_fallback.generate = AsyncMock(return_value=LLMResult(
+        status="success", provider="fallback", model="m2", content="Fallback OK", latency_ms=15.0
+    ))
+
+    provider = FallbackAIProvider(mock_primary, mock_fallback)
+    res = await provider.generate("test prompt")
+
+    assert res.status == "success"
+    assert res.content == "Fallback OK"
+    assert res.fallback_used is True
+    mock_fallback.generate.assert_called_once()
 
 @pytest.mark.asyncio
-async def test_orchestrator_execution():
-    provider = AsyncMock()
-    provider.generate.return_value = LLMResult(
-        status="success", provider="deepseek", model="chat", content="Orchestrated", latency_ms=50
-    )
-    
-    orchestrator = AIOrchestrator(default_provider=provider)
-    result = await orchestrator.generate("Test prompt")
-    
-    assert result.status == "success"
-    assert result.content == "Orchestrated"
+@pytest.mark.parametrize("err_code", ["HTTP_400", "HTTP_401", "UNKNOWN_ERROR", None])
+async def test_non_retryable_errors_do_not_trigger_fallback(mock_primary, mock_fallback, err_code):
+    mock_primary.generate = AsyncMock(return_value=LLMResult(
+        status="error", provider="primary", model="m1", content="Client/Unknown Error", error_code=err_code, latency_ms=10.0
+    ))
+
+    provider = FallbackAIProvider(mock_primary, mock_fallback)
+    res = await provider.generate("test prompt")
+
+    assert res.status == "error"
+    assert res.error_code == err_code
+    mock_fallback.generate.assert_not_called()
+
+@pytest.mark.asyncio
+async def test_retryable_primary_plus_fallback_failure(mock_primary, mock_fallback):
+    mock_primary.generate = AsyncMock(return_value=LLMResult(
+        status="error", provider="primary", model="m1", content="Primary Error", error_code="HTTP_503", latency_ms=10.0
+    ))
+    mock_fallback.generate = AsyncMock(return_value=LLMResult(
+        status="error", provider="fallback", model="m2", content="Fallback Error", error_code="HTTP_500", latency_ms=12.0
+    ))
+
+    provider = FallbackAIProvider(mock_primary, mock_fallback)
+    res = await provider.generate("test prompt")
+
+    assert res.status == "error"
+    assert res.content == "Fallback Error"
+    mock_fallback.generate.assert_called_once()

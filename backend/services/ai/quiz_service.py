@@ -1,90 +1,133 @@
-import logging
 import json
-from typing import Optional, Dict, Any, List
+import logging
+from typing import Dict, Any, List, Optional
 from backend.services.ai.orchestrator import AIOrchestrator
 from backend.services.ai.provider_base import LLMResult
 
 logger = logging.getLogger(__name__)
 
-class QuizGenerationService:
+class QuizService:
     def __init__(self, orchestrator: AIOrchestrator):
         if not orchestrator:
-            raise ValueError("QuizGenerationService yêu cầu AIOrchestrator.")
+            raise ValueError("QuizService yêu cầu AIOrchestrator.")
         self.orchestrator = orchestrator
 
-    async def generate_quiz(self, topic: str, num_questions: int = 3, difficulty: str = "medium", client_facing: bool = False, **kwargs: Any) -> LLMResult:
-        """Tạo các câu hỏi trắc nghiệm dựa trên chủ đề, số lượng và độ khó được yêu cầu."""
-        if not topic:
-            raise ValueError("Chủ đề (topic) không được để trống.")
-
-        system_prompt = (
-            "Bạn là trợ lý AI chuyên tạo câu hỏi kiểm tra đánh giá năng lực học tập cho hệ thống LMS. "
-            "Hãy trả về kết quả dưới định dạng JSON hợp lệ bao gồm danh sách các câu hỏi trắc nghiệm. "
-            "Mỗi câu hỏi phải bao gồm: question, options (danh sách 4 lựa chọn A, B, C, D), correct_answer và explanation."
-        )
-
-        prompt = (
-            f"Hãy tạo cho tôi {num_questions} câu hỏi trắc nghiệm về chủ đề: '{topic}' "
-            f"với mức độ khó là '{difficulty}'. "
-            "Đảm bảo định dạng đầu ra là một đối tượng JSON có khóa 'questions' chứa danh sách câu hỏi."
-        )
-
-        result = await self.orchestrator.generate(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            **kwargs
-        )
-
-        if result.status != "success":
-            return result
-
-        # Thực hiện structured validation và xử lý client-facing boundary nếu cần
+    def validate_and_parse_quiz(self, raw_content: str) -> Dict[str, Any]:
+        """Validate và parse cấu trúc quiz từ raw content của LLM hoặc input."""
         try:
-            # Parse nội dung để validate JSON và schema cơ bản
-            parsed_content = json.loads(result.content)
-            
-            if not isinstance(parsed_content, dict) or "questions" not in parsed_content:
-                # Thử cố gắng parse linh hoạt nếu LLM trả về list hoặc dạng khác
-                if isinstance(parsed_content, list):
-                    parsed_content = {"questions": parsed_content}
-                else:
-                    raise ValueError("JSON không đúng cấu trúc schema yêu cầu (thiếu khóa 'questions').")
-
-            questions = parsed_content.get("questions", [])
-            if not isinstance(questions, list) or len(questions) == 0:
-                raise ValueError("Danh sách câu hỏi trống hoặc không hợp lệ.")
-
-            validated_questions = []
-            for q in questions:
-                if not isinstance(q, dict) or "question" not in q or "options" not in q:
-                    continue
-                
-                # Copy câu hỏi để tránh ảnh hưởng dữ liệu gốc
-                clean_q = dict(q)
-                
-                # Nếu phục vụ client-facing trước khi submit, ẩn đáp án và giải thích
-                if client_facing:
-                    clean_q.pop("correct_answer", None)
-                    clean_q.pop("explanation", None)
-                
-                validated_questions.append(clean_q)
-
-            if len(validated_questions) == 0:
-                raise ValueError("Không có câu hỏi nào vượt qua bước validation schema.")
-
-            parsed_content["questions"] = validated_questions
-            result.content = json.dumps(parsed_content, ensure_ascii=False)
-
+            if isinstance(raw_content, dict):
+                data = raw_content
+            else:
+                # Cố gắng parse JSON, hỗ trợ trường hợp bọc trong markdown code block
+                cleaned = raw_content.strip()
+                if cleaned.startswith("```json"):
+                    cleaned = cleaned[7:]
+                if cleaned.startswith("```"):
+                    cleaned = cleaned[3:]
+                if cleaned.endswith("```"):
+                    cleaned = cleaned[:-3]
+                data = json.loads(cleaned.strip())
         except Exception as e:
-            logger.error(f"Quiz validation lỗi: {str(e)}")
-            return LLMResult(
-                status="error",
-                provider=result.provider,
-                model=result.model,
-                content=f"Lỗi cấu trúc dữ liệu Quiz: {str(e)}",
-                latency_ms=result.latency_ms,
-                error_code="INVALID_QUIZ_SCHEMA",
-                fallback_used=result.fallback_used
+            raise ValueError(f"INVALID_QUIZ_SCHEMA: Không thể parse JSON từ raw content: {str(e)}")
+
+        if not isinstance(data, dict) or "questions" not in data:
+            raise ValueError("INVALID_QUIZ_SCHEMA: Dữ liệu quiz phải là dictionary và chứa khóa 'questions'.")
+
+        questions = data.get("questions")
+        if not isinstance(questions, list) or len(questions) == 0:
+            raise ValueError("INVALID_QUIZ_SCHEMA: Khóa 'questions' phải là một list không rỗng.")
+
+        validated_questions = []
+        for q in questions:
+            if not isinstance(q, dict):
+                raise ValueError("INVALID_QUIZ_SCHEMA: Mỗi question phải là một dictionary.")
+
+            # 1. Validate question text
+            q_text = q.get("question") or q.get("question_text")
+            if not q_text or not isinstance(q_text, str) or not q_text.strip():
+                raise ValueError("INVALID_QUIZ_SCHEMA: question text không được rỗng và phải là chuỗi.")
+
+            # 2. Validate type (chỉ hỗ trợ 'mcq')
+            q_type = q.get("type", "mcq")
+            if q_type not in ["mcq"]:
+                raise ValueError(f"INVALID_QUIZ_SCHEMA: Loại câu hỏi không hỗ trợ: {q_type}")
+
+            # 3. Validate options
+            options = q.get("options")
+            if not isinstance(options, list) or len(options) == 0:
+                raise ValueError("INVALID_QUIZ_SCHEMA: Options phải là một list không rỗng.")
+
+            opt_ids = set()
+            for opt in options:
+                if not isinstance(opt, dict):
+                    raise ValueError("INVALID_QUIZ_SCHEMA: Mỗi option phải là một dictionary.")
+                opt_id = opt.get("id")
+                opt_text = opt.get("text")
+                if not opt_id or not isinstance(opt_id, str) or not opt_id.strip():
+                    raise ValueError("INVALID_QUIZ_SCHEMA: Option ID không được rỗng.")
+                if not opt_text or not isinstance(opt_text, str) or not opt_text.strip():
+                    raise ValueError("INVALID_QUIZ_SCHEMA: Option text không được rỗng.")
+
+                if opt_id in opt_ids:
+                    raise ValueError(f"INVALID_QUIZ_SCHEMA: Duplicate option ID: {opt_id}")
+                opt_ids.add(opt_id)
+
+            # 4. Validate internal generated representation (correct answer/correct_option_id)
+            correct_id = q.get("correct_option_id") or q.get("correct_answer")
+            if not correct_id or (correct_id not in opt_ids):
+                raise ValueError("INVALID_QUIZ_SCHEMA: correct_option_id/correct_answer bắt buộc phải tồn tại và trỏ tới option ID hợp lệ.")
+
+            validated_q = {
+                "question": q_text.strip(),
+                "type": q_type,
+                "options": [{"id": opt["id"].strip(), "text": opt["text"].strip()} for opt in options],
+                "correct_option_id": correct_id,
+                "explanation": q.get("explanation", "")
+            }
+            if "source_metadata" in q and q["source_metadata"]:
+                validated_q["source_metadata"] = q["source_metadata"]
+
+            validated_questions.append(validated_q)
+
+        return {"questions": validated_questions}
+
+    async def generate_quiz(self, prompt_text: str, client_facing: bool = False, **kwargs: Any) -> Dict[str, Any]:
+        """Tạo quiz thông qua LLM orchestrator, validate schema và lọc bỏ thông tin nhạy cảm nếu client_facing=True."""
+        system_prompt = (
+            "Bạn là trợ lý AI chuyên tạo câu hỏi trắc nghiệm (mcq) cho LMS. "
+            "Hãy trả về kết quả dưới dạng JSON hợp lệ tuân thủ schema gồm danh sách các câu hỏi, "
+            "mỗi câu có 'question', 'type' ('mcq'), 'options' (list gồm 'id' và 'text'), "
+            "'correct_option_id' và 'explanation'."
+        )
+
+        try:
+            llm_result = await self.orchestrator.generate(
+                prompt=prompt_text,
+                system_prompt=system_prompt,
+                **kwargs
             )
 
-        return result
+            if llm_result.status != "success":
+                raise ValueError(f"LLM generation failed: {llm_result.error_code}")
+
+            parsed_data = self.validate_and_parse_quiz(llm_result.content)
+        except Exception as e:
+            if "INVALID_QUIZ_SCHEMA" in str(e):
+                raise e
+            raise ValueError(f"INVALID_QUIZ_SCHEMA: {str(e)}")
+
+        # 7. Nếu client_facing=True, loại bỏ hoàn toàn các trường nhạy cảm
+        if client_facing:
+            sanitized_questions = []
+            for q in parsed_data["questions"]:
+                sanitized_q = {
+                    "question": q["question"],
+                    "type": q["type"],
+                    "options": q["options"]
+                }
+                if "source_metadata" in q:
+                    sanitized_q["source_metadata"] = q["source_metadata"]
+                sanitized_questions.append(sanitized_q)
+            return {"questions": sanitized_questions}
+
+        return parsed_data

@@ -1,5 +1,6 @@
+import json
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Dict, Any, Optional
 from backend.services.ai.orchestrator import AIOrchestrator
 from backend.services.ai.provider_base import LLMResult
 
@@ -11,40 +12,75 @@ class ExplanationService:
             raise ValueError("ExplanationService yêu cầu AIOrchestrator.")
         self.orchestrator = orchestrator
 
-    async def explain_wrong_answer(
-        self, 
-        question: str, 
-        student_answer: str, 
-        correct_answer: str, 
-        explanation: Optional[str] = None, 
-        context_documents: Optional[List[str]] = None,
+    async def generate_explanation(
+        self,
+        question: str,
+        student_answer: str,
+        correct_answer: str,
+        context: Optional[str] = None,
+        source_metadata: Optional[Any] = None,
         **kwargs: Any
-    ) -> LLMResult:
-        """Phân tích lý do tại sao học viên chọn sai và đưa ra gợi ý ôn tập cho hệ thống LMS dựa trên ngữ cảnh."""
-        
+    ) -> Dict[str, Any]:
+        """Tạo giải thích câu trả lời sai dựa trên context và source thật (không tự fabricate)."""
+        prompt = f"Câu hỏi: {question}\nĐáp án của học sinh: {student_answer}\nĐáp án đúng: {correct_answer}"
+        if context:
+            prompt += f"\nContext/Tài liệu tham khảo thực tế:\n{context}"
+
         system_prompt = (
-            "Bạn là trợ lý AI chuyên phân tích lỗi sai và hướng dẫn học tập cho hệ thống LMS. "
-            "Nhiệm vụ của bạn là giải thích cho học viên biết tại sao đáp án của họ chưa chính xác, "
-            "phân tích điểm khác biệt với đáp án đúng, và đưa ra gợi ý ôn tập mang tính xây dựng, không chê bai. "
-            "Nếu có tài liệu ngữ cảnh được cung cấp, hãy bám sát vào ngữ cảnh đó và không bịa đặt nguồn."
+            "Bạn là trợ lý AI LMS hỗ trợ giải thích lý do sai sót cho học sinh một cách sư phạm. "
+            "Trả về kết quả dưới dạng JSON chứa explanation và key_concept."
         )
 
-        context_section = ""
-        if context_documents and len(context_documents) > 0:
-            formatted_context = "\n\n---\n\n".join(context_documents)
-            context_section = f"\n\nNgữ cảnh tài liệu tham khảo:\n{formatted_context}"
+        try:
+            llm_result = await self.orchestrator.generate(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                **kwargs
+            )
 
-        prompt = (
-            f"Câu hỏi: {question}\n"
-            f"Đáp án học viên đã chọn: {student_answer}\n"
-            f"Đáp án đúng thực tế: {correct_answer}\n"
-            f"Giải thích gốc (nếu có): {explanation or 'Không có'}"
-            f"{context_section}\n\n"
-            "Hãy viết lời giải thích rõ ràng, dễ hiểu giúp học viên hiểu bản chất vấn đề và không lặp lại lỗi sai."
-        )
+            # Nếu orchestrator/provider lỗi, trả về failure đúng contract, không giả success
+            if llm_result.status != "success":
+                return {
+                    "status": "error",
+                    "error_code": llm_result.error_code or "LLM_GENERATION_FAILED",
+                    "explanation": llm_result.content
+                }
 
-        return await self.orchestrator.generate(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            **kwargs
-        )
+            content = llm_result.content
+            try:
+                cleaned = content.strip()
+                if cleaned.startswith("```json"):
+                    cleaned = cleaned[7:]
+                if cleaned.startswith("```"):
+                    cleaned = cleaned[3:]
+                if cleaned.endswith("```"):
+                    cleaned = cleaned[:-3]
+                data = json.loads(cleaned.strip())
+                explanation = data.get("explanation", content)
+                key_concept = data.get("key_concept", "")
+            except Exception:
+                explanation = content
+                key_concept = ""
+
+            result = {
+                "status": "success",
+                "explanation": explanation,
+                "key_concept": key_concept,
+                "sources": []
+            }
+
+            # Preserve source metadata thật nếu có, không tự tạo source nếu không có input
+            if source_metadata:
+                if isinstance(source_metadata, list):
+                    result["sources"] = source_metadata
+                else:
+                    result["sources"] = [source_metadata]
+
+            return result
+
+        except Exception as e:
+            return {
+                "status": "error",
+                "error_code": "EXCEPTION",
+                "explanation": str(e)
+            }
