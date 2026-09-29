@@ -65,6 +65,16 @@ class DeepTutorIntegrationTests(unittest.TestCase):
     def test_query_validation(self):
         with self.assertRaises(ValidationError): QueryInput(course_id="c", question="")
 
+    def test_course_knowledge_base_mapping(self):
+        self.assertEqual(DeepTutorService.kb_name("INT1339"), "int1339-python")
+        self.assertEqual(DeepTutorService.kb_name("INT1339", "int1339-python"), "int1339-python")
+        self.assertEqual(DeepTutorService.kb_name("MATH101"), "lms-math101")
+        self.assertEqual(DeepTutorService.kb_name("MATH101", "lms-math101"), "lms-math101")
+        with self.assertRaisesRegex(DeepTutorError, "does not match"):
+            DeepTutorService.kb_name("INT1339", "lms-int1339")
+        with self.assertRaisesRegex(DeepTutorError, "does not match"):
+            DeepTutorService.kb_name("MATH101", "int1339-python")
+
     def test_query_missing_and_unready_kb(self):
         with TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(DeepTutorError, "not found"):
@@ -78,6 +88,7 @@ class DeepTutorIntegrationTests(unittest.TestCase):
             adapter = FakeAdapter(); service = self.make_service(Path(tmp), adapter)
             request = DocumentInput(document_id="d1", course_id="INT1339", filename="lesson.txt", content="lesson")
             self.assertEqual(service.ingest_document(request)["action"], "create")
+            self.assertEqual(adapter.created[0][0], "int1339-python")
             self.assertEqual(service.ingest_document(request)["action"], "add")
 
     def test_unsupported_document_error(self):

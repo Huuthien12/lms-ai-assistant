@@ -49,6 +49,20 @@ def test_ingests_exact_moodle_document_and_pdf_bytes_without_secret_response_dat
     assert "staging" not in response_text
 
 
+def test_ingestion_forwards_the_optional_mapped_kb_name():
+    moodle = MagicMock()
+    moodle.get_normalized_document.return_value = ({"course_id": "INT1339"}, b"%PDF")
+    deeptutor = MagicMock()
+    deeptutor.ingest_moodle_document.return_value = {"kb_id": "int1339-python"}
+
+    response = client(moodle, deeptutor).post(
+        "/moodle/resources/ingest", json={"course_id_moodle": 9, "resource_id": 1, "kb_name": "int1339-python"}
+    )
+
+    assert response.status_code == 200
+    assert deeptutor.ingest_moodle_document.call_args.kwargs["kb_id"] == "int1339-python"
+
+
 def test_moodle_failure_does_not_call_deeptutor():
     moodle = MagicMock()
     moodle.get_normalized_document.side_effect = RuntimeError("private Moodle failure")

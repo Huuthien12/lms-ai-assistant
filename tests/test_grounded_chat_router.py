@@ -21,7 +21,7 @@ class FakeDeepTutor:
 
     def kb_name(self, course_id, kb_name):
         self.kb_calls.append((course_id, kb_name))
-        return kb_name or f"lms-{course_id.lower()}"
+        return kb_name or ("int1339-python" if course_id == "INT1339" else f"lms-{course_id.lower()}")
 
     def query(self, request):
         self.query_calls.append(request)
@@ -93,6 +93,22 @@ def test_empty_sources_use_grounded_chat_safe_response_without_provider():
     assert response.json()["sources"] == []
     assert response.json()["ai"] == {"provider": "safe-fallback", "model": "local-safe", "fallback_used": True}
     orchestrator.generate.assert_not_awaited()
+
+
+def test_grounded_chat_uses_the_course_mapped_kb_when_omitted():
+    deeptutor = FakeDeepTutor({"sources": []})
+    chat_service = MagicMock()
+    chat_service.chat = AsyncMock(return_value=GroundedChatResponse(
+        status="success", answer="safe", course_id="INT1339", kb_name="int1339-python",
+        sources=[], ai={"provider": "safe-fallback", "model": "local-safe", "fallback_used": True},
+    ))
+
+    response = client(deeptutor, chat_service).post(
+        "/chat/grounded", json={"question": "Question", "course_id": "INT1339"}
+    )
+
+    assert response.status_code == 200
+    assert deeptutor.query_calls[0].kb_id == "int1339-python"
 
 
 def test_deeptutor_failure_does_not_call_ai():

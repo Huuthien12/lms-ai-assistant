@@ -13,6 +13,7 @@ from .errors import DeepTutorError
 
 
 class DeepTutorService:
+    COURSE_KNOWLEDGE_BASES = {"int1339": "int1339-python"}
     SUPPORTED_DOCUMENT_EXTENSIONS = {
         ".csv", ".docx", ".epub", ".htm", ".html", ".json",
         ".md", ".pdf", ".pptx", ".rtf", ".txt",
@@ -23,10 +24,20 @@ class DeepTutorService:
 
     @staticmethod
     def kb_name(course_id: str, explicit: str | None = None) -> str:
-        value = explicit or f"lms-{course_id}"
-        normalized = re.sub(r"[^a-z0-9_-]+", "-", value.strip().lower()).strip("-")
+        course_key = course_id.strip().lower()
+        default = re.sub(
+            r"[^a-z0-9_-]+", "-",
+            DeepTutorService.COURSE_KNOWLEDGE_BASES.get(course_key, f"lms-{course_id}").strip().lower(),
+        ).strip("-")
+        normalized = re.sub(r"[^a-z0-9_-]+", "-", (explicit or default).strip().lower()).strip("-")
         if not normalized:
             raise DeepTutorError("invalid_kb", "Knowledge-base id is invalid.", status_code=422)
+        if normalized != default:
+            raise DeepTutorError(
+                "kb_course_mismatch",
+                "Knowledge-base id does not match the course.",
+                status_code=422,
+            )
         return normalized
 
     @staticmethod
