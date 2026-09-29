@@ -77,6 +77,22 @@ def test_moodle_failure_does_not_call_deeptutor():
     deeptutor.ingest_moodle_document.assert_not_called()
 
 
+def test_unexpected_moodle_failure_is_sanitized():
+    moodle = MagicMock()
+    moodle.get_normalized_document.side_effect = ValueError("D:/private/token=secret")
+    deeptutor = MagicMock()
+
+    response = client(moodle, deeptutor).post(
+        "/moodle/resources/ingest", json={"course_id_moodle": 9, "resource_id": 1}
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == "moodle_document_unavailable"
+    assert "private" not in response.text.lower()
+    assert "secret" not in response.text.lower()
+    deeptutor.ingest_moodle_document.assert_not_called()
+
+
 def test_deeptutor_failure_is_returned_as_typed_http_error():
     moodle = MagicMock()
     moodle.get_normalized_document.return_value = ({"course_id": "INT1339"}, b"%PDF")

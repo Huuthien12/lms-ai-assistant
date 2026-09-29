@@ -19,4 +19,4 @@ class DeepTutorError(Exception):
         self.details = details or {}
 
     def as_dict(self) -> dict[str, Any]:
-        return {"code": self.code, "message": self.message, "details": self.details}
+        return {"code": self.code, "message": self.message}

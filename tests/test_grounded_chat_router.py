@@ -123,3 +123,18 @@ def test_deeptutor_failure_does_not_call_ai():
     assert response.status_code == 504
     assert response.json()["detail"]["code"] == "timeout"
     chat_service.chat.assert_not_awaited()
+
+
+def test_provider_failure_is_sanitized():
+    deeptutor = FakeDeepTutor({"sources": []})
+    chat_service = MagicMock()
+    chat_service.chat = AsyncMock(side_effect=RuntimeError("D:/private/token=secret"))
+
+    response = client(deeptutor, chat_service).post(
+        "/chat/grounded", json={"question": "Question", "course_id": "INT1339"}
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == "ai_provider_failure"
+    assert "private" not in response.text.lower()
+    assert "secret" not in response.text.lower()

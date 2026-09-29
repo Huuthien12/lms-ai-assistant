@@ -65,7 +65,7 @@ def create_grounded_chat_router(
         if grounded_chat_service is None:
             raise HTTPException(
                 status_code=503,
-                detail={"code": "ai_unavailable", "message": "DeepSeek is not configured."},
+                detail={"code": "ai_unavailable", "message": "AI provider is not configured."},
             )
         try:
             kb_name = deeptutor_service.kb_name(request.course_id, request.kb_name)
@@ -75,14 +75,20 @@ def create_grounded_chat_router(
         except DeepTutorError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.as_dict()) from exc
 
-        response = await grounded_chat_service.chat(
-            GroundedChatRequest(
-                query=request.question,
-                contexts=retrieved_contexts(query_result["result"]),
-                course_id=query_result["course_id"],
-                kb_name=query_result["kb_id"],
+        try:
+            response = await grounded_chat_service.chat(
+                GroundedChatRequest(
+                    query=request.question,
+                    contexts=retrieved_contexts(query_result["result"]),
+                    course_id=query_result["course_id"],
+                    kb_name=query_result["kb_id"],
+                )
             )
-        )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail={"code": "ai_provider_failure", "message": "AI provider could not generate a response."},
+            ) from exc
         return asdict(response)
 
     return router
