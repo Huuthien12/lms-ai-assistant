@@ -60,7 +60,9 @@ from deeptutor_integration import DeepTutorConfig, DeepTutorService
 from deeptutor_integration.api import create_router as create_deeptutor_router
 from deeptutor_integration.contracts import DocumentInput, QueryInput
 from backend.services.ai.deepseek_provider import DeepSeekProvider
+from backend.services.ai.fallback_provider import FallbackAIProvider
 from backend.services.ai.grounded_chat import GroundedChatService
+from backend.services.ai.ollama_provider import OllamaProvider
 from backend.services.ai.orchestrator import AIOrchestrator
 from grounded_chat_router import create_grounded_chat_router
 from moodle_adapter import MoodleAdapter
@@ -111,10 +113,16 @@ except ValueError:
 app.include_router(create_moodle_ingestion_router(MOODLE_ADAPTER, DEEPTUTOR_SERVICE))
 
 _deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
+_ollama_provider = OllamaProvider(
+    model=os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
+    base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+)
 GROUNDED_CHAT_SERVICE = (
-    GroundedChatService(AIOrchestrator(DeepSeekProvider(_deepseek_api_key)))
+    GroundedChatService(AIOrchestrator(FallbackAIProvider(
+        DeepSeekProvider(_deepseek_api_key), _ollama_provider
+    )))
     if _deepseek_api_key
-    else None
+    else GroundedChatService(AIOrchestrator(_ollama_provider))
 )
 app.include_router(create_grounded_chat_router(DEEPTUTOR_SERVICE, GROUNDED_CHAT_SERVICE))
 
