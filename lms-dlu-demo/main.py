@@ -67,6 +67,7 @@ from backend.services.ai.orchestrator import AIOrchestrator
 from grounded_chat_router import create_grounded_chat_router
 from moodle_adapter import MoodleAdapter
 from moodle_ingestion_router import create_moodle_ingestion_router
+from readiness_router import create_readiness_router
 
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
@@ -125,6 +126,7 @@ GROUNDED_CHAT_SERVICE = (
     else GroundedChatService(AIOrchestrator(_ollama_provider))
 )
 app.include_router(create_grounded_chat_router(DEEPTUTOR_SERVICE, GROUNDED_CHAT_SERVICE))
+app.include_router(create_readiness_router(DEEPTUTOR_SERVICE, _ollama_provider, MOODLE_ADAPTER))
 
 
 # ==============================================================================
