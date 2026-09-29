@@ -59,6 +59,7 @@ if PROJECT_ROOT not in sys.path:
 from deeptutor_integration import DeepTutorConfig, DeepTutorService
 from deeptutor_integration.api import create_router as create_deeptutor_router
 from deeptutor_integration.contracts import DocumentInput, QueryInput
+from deeptutor_integration.errors import DeepTutorError
 from backend.services.ai.deepseek_provider import DeepSeekProvider
 from backend.services.ai.fallback_provider import FallbackAIProvider
 from backend.services.ai.grounded_chat import GroundedChatService
@@ -192,20 +193,6 @@ def safe_filename(filename: str):
     return filename
 
 
-def get_kb_name(course_id: str) -> str:
-    """
-    Mỗi môn học sử dụng một Knowledge Base riêng.
-
-    INT1339 -> lms-int1339
-    INT1401 -> lms-int1401
-    """
-
-    return (
-        f"lms-{course_id.strip().lower()}"
-    )
-
-
-# ==============================================================================
 # 8. DEEPTUTOR HELPERS
 # ==============================================================================
 
@@ -924,7 +911,11 @@ def ask_deeptutor(course_id: str, message: str):
         "response": response,
         "session_id": result.get("session_id"),
         "kb_name": query_result["kb_id"],
-        "sources": sources if isinstance(sources, list) else [],
+        "sources": [
+            {key: source.get(key) for key in ("title", "page", "score")}
+            for source in sources
+            if isinstance(source, dict)
+        ] if isinstance(sources, list) else [],
     }
 
 
@@ -967,8 +958,7 @@ def root():
         "status": "ok",
         "message": "LMS DeepTutor Backend đang hoạt động",
         "database": DATABASE,
-        "deeptutor_connected": deeptutor_available,
-        "deeptutor_exe": DEEPTUTOR_EXE
+        "deeptutor_connected": deeptutor_available
     }
 
 
@@ -1642,9 +1632,13 @@ async def upload_material(
                 ]
             )
 
-        except Exception as e:
+        except DeepTutorError as exc:
 
-            deeptutor_error = str(e)
+            deeptutor_error = exc.message
+
+        except Exception:
+
+            deeptutor_error = "DeepTutor document ingestion failed."
 
         # ----------------------------------------------------------------------
         # RESPONSE
@@ -1885,67 +1879,14 @@ def get_chat_history(
     deprecated=True
 )
 def deeptutor_status():
-
-    available = os.path.exists(
-        DEEPTUTOR_EXE
-    )
-
-    result = {
-        "available": available,
-        "executable": DEEPTUTOR_EXE,
-        "directory": DEEPTUTOR_DIR
-    }
-
-    if not available:
-
-        result[
-            "message"
-        ] = "Không tìm thấy DeepTutor."
-
-        return result
-
     try:
-
-        command_result = (
-            run_deeptutor_command(
-                [
-                    "kb",
-                    "list"
-                ],
-                timeout=60
-            )
-        )
-
-        result[
-            "command_success"
-        ] = (
-            command_result.returncode == 0
-        )
-
-        result[
-            "knowledge_bases"
-        ] = command_result.stdout.strip()
-
-        if command_result.stderr.strip():
-
-            result[
-                "stderr"
-            ] = command_result.stderr.strip()
-
-    except Exception as e:
-
-        result[
-            "command_success"
-        ] = False
-
-        result[
-            "error"
-        ] = str(e)
-
-    return result
+        health = DEEPTUTOR_SERVICE.health()
+        available = health.get("status") == "available"
+    except Exception:
+        available = False
+    return {"available": available, "command_success": available}
 
 
-# ==============================================================================
 # 22. DEEPTUTOR KB STATUS FOR COURSE
 # ==============================================================================
 
@@ -1955,50 +1896,27 @@ def deeptutor_status():
 def get_course_kb_status(
     course_id: str
 ):
-
-    kb_name = get_kb_name(
-        course_id
-    )
-
     try:
-
-        exists = deeptutor_kb_exists(
-            kb_name
-        )
-
-        if not exists:
-
-            return {
-                "course_id": course_id,
-                "kb_name": kb_name,
-                "exists": False
-            }
-
-        result = run_deeptutor_command(
-            [
-                "kb",
-                "info",
-                kb_name
-            ],
-            timeout=60
-        )
-
+        kb_name = DEEPTUTOR_SERVICE.kb_name(course_id)
+        status = DEEPTUTOR_SERVICE.status(kb_name)
         return {
             "course_id": course_id,
             "kb_name": kb_name,
             "exists": True,
-            "info": result.stdout.strip()
+            "ready": status["ready"],
+            "status": status["knowledge_base"].get("status"),
         }
-
-    except Exception as e:
-
+    except DeepTutorError as exc:
+        if exc.code == "kb_not_found":
+            return {"course_id": course_id, "kb_name": DEEPTUTOR_SERVICE.kb_name(course_id), "exists": False}
+        raise HTTPException(status_code=exc.status_code, detail=exc.as_dict()) from exc
+    except Exception as exc:
         raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
+            status_code=503,
+            detail={"code": "deeptutor_unavailable", "message": "DeepTutor is unavailable."},
+        ) from exc
 
 
-# ==============================================================================
 # 23. CHAT WITH REAL DEEPTUTOR
 # ==============================================================================
 
@@ -2162,15 +2080,23 @@ def chat_with_deeptutor(
                 )
             )
 
-        except Exception as e:
+        except DeepTutorError as exc:
+
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=exc.as_dict()
+            ) from exc
+
+        except Exception as exc:
 
             raise HTTPException(
                 status_code=503,
-                detail=(
-                    "DeepTutor hiện không thể "
-                    f"xử lý câu hỏi: {e}"
-                )
-            )
+                detail={
+                    "code": "deeptutor_unavailable",
+                    "message": "DeepTutor is unable to process the question."
+                }
+            ) from exc
+
 
         bot_response = (
             deeptutor_result[
