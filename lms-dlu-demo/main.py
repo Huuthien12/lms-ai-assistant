@@ -59,6 +59,10 @@ if PROJECT_ROOT not in sys.path:
 from deeptutor_integration import DeepTutorConfig, DeepTutorService
 from deeptutor_integration.api import create_router as create_deeptutor_router
 from deeptutor_integration.contracts import DocumentInput, QueryInput
+from backend.services.ai.deepseek_provider import DeepSeekProvider
+from backend.services.ai.grounded_chat import GroundedChatService
+from backend.services.ai.orchestrator import AIOrchestrator
+from grounded_chat_router import create_grounded_chat_router
 
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
@@ -97,6 +101,14 @@ DEEPTUTOR_DIR = str(DEEPTUTOR_CONFIG.deeptutor_dir)
 DEEPTUTOR_EXE = str(DEEPTUTOR_CONFIG.executable)
 
 app.include_router(create_deeptutor_router(DEEPTUTOR_SERVICE))
+
+_deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
+GROUNDED_CHAT_SERVICE = (
+    GroundedChatService(AIOrchestrator(DeepSeekProvider(_deepseek_api_key)))
+    if _deepseek_api_key
+    else None
+)
+app.include_router(create_grounded_chat_router(DEEPTUTOR_SERVICE, GROUNDED_CHAT_SERVICE))
 
 
 # ==============================================================================
