@@ -32,7 +32,7 @@ def create_moodle_ingestion_router(
             normalized_doc, pdf_bytes = moodle_adapter.get_normalized_document(
                 request.course_id_moodle, request.resource_id
             )
-        except RuntimeError as exc:
+        except Exception as exc:
             raise HTTPException(
                 status_code=502,
                 detail={"code": "moodle_document_unavailable", "message": "Unable to retrieve Moodle document."},

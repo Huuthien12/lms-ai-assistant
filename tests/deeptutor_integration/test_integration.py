@@ -65,6 +65,10 @@ class DeepTutorIntegrationTests(unittest.TestCase):
     def test_query_validation(self):
         with self.assertRaises(ValidationError): QueryInput(course_id="c", question="")
 
+    def test_public_error_contract_hides_internal_details(self):
+        error = DeepTutorError("process_failure", "DeepTutor command failed.", details={"reason": "D:/private/token=secret"})
+        self.assertEqual(error.as_dict(), {"code": "process_failure", "message": "DeepTutor command failed."})
+
     def test_course_knowledge_base_mapping(self):
         self.assertEqual(DeepTutorService.kb_name("INT1339"), "int1339-python")
         self.assertEqual(DeepTutorService.kb_name("INT1339", "int1339-python"), "int1339-python")
