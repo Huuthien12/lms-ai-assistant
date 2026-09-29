@@ -1,83 +1,94 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from backend.services.ai.grounded_chat import GroundedChatService, GroundedChatRequest, RetrievedContextItem
+
+from backend.services.ai.grounded_chat import (
+    GroundedChatRequest,
+    GroundedChatResponse,
+    GroundedChatService,
+    RetrievedContextItem,
+)
 from backend.services.ai.orchestrator import AIOrchestrator
 from backend.services.ai.provider_base import LLMResult
 
+
 @pytest.fixture
 def mock_orchestrator():
-    orch = MagicMock(spec=AIOrchestrator)
-    orch.generate = AsyncMock(return_value=LLMResult(
+    orchestrator = MagicMock(spec=AIOrchestrator)
+    orchestrator.generate = AsyncMock(return_value=LLMResult(
         status="success",
         provider="mock",
         model="mock-model",
-        content="Phản hồi từ grounded chat dựa trên tài liệu.",
-        latency_ms=15.0
+        content="Grounded answer.",
+        latency_ms=15.0,
+        fallback_used=True,
     ))
-    return orch
+    return orchestrator
+
 
 @pytest.mark.asyncio
-async def test_valid_grounded_context(mock_orchestrator):
-    service = GroundedChatService(mock_orchestrator)
-    req = GroundedChatRequest(
-        query="Python là gì?",
-        contexts=[
-            RetrievedContextItem(text="Python là ngôn ngữ lập trình bậc cao.", source_id="s1", title="Intro to Python")
-        ],
+async def test_normal_response_preserves_result_and_request_metadata(mock_orchestrator):
+    request = GroundedChatRequest(
+        query="What is Python?",
+        contexts=[RetrievedContextItem(text="Python is a programming language.")],
         course_id="c1",
-        kb_name="python_kb"
+        kb_name="python_kb",
     )
-    res = await service.chat(req)
-    assert res.status == "success"
-    assert "Phản hồi" in res.content
-    mock_orchestrator.generate.assert_called_once()
+
+    response = await GroundedChatService(mock_orchestrator).chat(request)
+
+    assert isinstance(response, GroundedChatResponse)
+    assert response.status == "success"
+    assert response.answer == "Grounded answer."
+    assert response.course_id == "c1"
+    assert response.kb_name == "python_kb"
+    assert response.ai == {"provider": "mock", "model": "mock-model", "fallback_used": True}
+    mock_orchestrator.generate.assert_awaited_once()
+
 
 @pytest.mark.asyncio
-async def test_source_metadata_preservation(mock_orchestrator):
-    service = GroundedChatService(mock_orchestrator)
+async def test_response_preserves_real_source_metadata(mock_orchestrator):
     item = RetrievedContextItem(
-        text="Nội dung test metadata",
+        text="Source content.",
         source_id="doc_123",
-        title="Tài liệu LMS",
-        url="https://lms.example.com/doc",
-        score=0.95
+        title="LMS document",
+        url="https://lms.example.test/doc",
+        score=0.95,
+        metadata={"page": 3},
     )
-    req = GroundedChatRequest(query="Test?", contexts=[item], course_id="course_99", kb_name="kb_test")
+    request = GroundedChatRequest(query="Test?", contexts=[item], course_id="course_99", kb_name="kb_test")
 
-    # Kiểm tra service nhận đúng request object cấu trúc chứa metadata
-    assert req.contexts[0].source_id == "doc_123"
-    assert req.contexts[0].title == "Tài liệu LMS"
-    assert req.contexts[0].url == "https://lms.example.com/doc"
+    response = await GroundedChatService(mock_orchestrator).chat(request)
 
-@pytest.mark.asyncio
-async def test_course_id_kb_name_preservation(mock_orchestrator):
-    service = GroundedChatService(mock_orchestrator)
-    req = GroundedChatRequest(
-        query="Test course kb",
-        contexts=[RetrievedContextItem(text="Context text")],
-        course_id="MATH101",
-        kb_name="math_kb"
-    )
-    assert req.course_id == "MATH101"
-    assert req.kb_name == "math_kb"
+    assert response.sources == [{
+        "source_id": "doc_123",
+        "title": "LMS document",
+        "url": "https://lms.example.test/doc",
+        "score": 0.95,
+        "metadata": {"page": 3},
+    }]
+
 
 @pytest.mark.asyncio
-async def test_empty_context_safe_response(mock_orchestrator):
-    service = GroundedChatService(mock_orchestrator)
-    req = GroundedChatRequest(query="Câu hỏi không có context", contexts=[])
-    res = await service.chat(req)
+async def test_response_does_not_fabricate_missing_source_fields(mock_orchestrator):
+    request = GroundedChatRequest(query="Test?", contexts=[RetrievedContextItem(text="Only context text.")])
 
-    # Phải trả về safe response và KHÔNG gọi provider/orchestrator
-    assert res.status == "success"
-    assert res.fallback_used is True
-    assert "không tìm thấy tài liệu" in res.content
-    mock_orchestrator.generate.assert_not_called()
+    response = await GroundedChatService(mock_orchestrator).chat(request)
+
+    assert response.sources == [{}]
+    assert not {"source_id", "title", "url"} & response.sources[0].keys()
+
 
 @pytest.mark.asyncio
-async def test_no_fabricated_source(mock_orchestrator):
-    service = GroundedChatService(mock_orchestrator)
-    # Context không có source cụ thể, đảm bảo không bịa source
-    item = RetrievedContextItem(text="Chỉ có text thô không có id hay url.")
-    req = GroundedChatRequest(query="Hỏi?", contexts=[item])
-    res = await service.chat(req)
-    assert res.status == "success"
+async def test_empty_context_returns_safe_response_without_provider(mock_orchestrator):
+    request = GroundedChatRequest(query="No context", contexts=[], course_id="MATH101", kb_name="math_kb")
+
+    response = await GroundedChatService(mock_orchestrator).chat(request)
+
+    assert isinstance(response, GroundedChatResponse)
+    assert response.status == "success"
+    assert response.answer
+    assert response.course_id == "MATH101"
+    assert response.kb_name == "math_kb"
+    assert response.sources == []
+    assert response.ai == {"provider": "safe-fallback", "model": "local-safe", "fallback_used": True}
+    mock_orchestrator.generate.assert_not_awaited()

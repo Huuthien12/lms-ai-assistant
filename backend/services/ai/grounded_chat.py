@@ -22,17 +22,26 @@ class GroundedChatRequest:
     course_id: Optional[str] = None
     kb_name: Optional[str] = None
 
+@dataclass
+class GroundedChatResponse:
+    status: str
+    answer: str
+    course_id: Optional[str]
+    kb_name: Optional[str]
+    sources: List[Dict[str, Any]]
+    ai: Dict[str, Any]
+
 class GroundedChatService:
     def __init__(self, orchestrator: AIOrchestrator):
         if not orchestrator:
             raise ValueError("GroundedChatService yêu cầu AIOrchestrator.")
         self.orchestrator = orchestrator
 
-    async def chat(self, request: GroundedChatRequest, **kwargs: Any) -> LLMResult:
+    async def chat(self, request: GroundedChatRequest, **kwargs: Any) -> GroundedChatResponse:
         """Thực hiện grounded chat dựa hoàn toàn vào context được cung cấp từ bên ngoài (DeepTutor/application layer)."""
         if not request or not request.contexts:
             # Empty context -> Trả về safe response ngay lập tức, KHÔNG gọi AI provider
-            return LLMResult(
+            safe_result = LLMResult(
                 status="success",
                 provider="safe-fallback",
                 model="local-safe",
@@ -40,6 +49,18 @@ class GroundedChatService:
                 latency_ms=0.0,
                 error_code=None,
                 fallback_used=True
+            )
+            return GroundedChatResponse(
+                status=safe_result.status,
+                answer=safe_result.content,
+                course_id=request.course_id,
+                kb_name=request.kb_name,
+                sources=[],
+                ai={
+                    "provider": safe_result.provider,
+                    "model": safe_result.model,
+                    "fallback_used": safe_result.fallback_used,
+                },
             )
 
         # Xây dựng context text đồng thời bảo toàn metadata thực tế
@@ -56,10 +77,15 @@ class GroundedChatService:
 
             context_blocks.append(f"{source_info}\nNội dung: {item.text}")
             sources_meta.append({
-                "index": idx,
-                "source_id": item.source_id,
-                "title": item.title,
-                "url": item.url
+                key: value
+                for key, value in {
+                    "source_id": item.source_id,
+                    "title": item.title,
+                    "url": item.url,
+                    "score": item.score,
+                    "metadata": item.metadata,
+                }.items()
+                if value is not None and value != {}
             })
 
         combined_context = "\n\n".join(context_blocks)
@@ -87,4 +113,15 @@ class GroundedChatService:
             system_prompt=system_prompt,
             **kwargs
         )
-        return result
+        return GroundedChatResponse(
+            status=result.status,
+            answer=result.content,
+            course_id=request.course_id,
+            kb_name=request.kb_name,
+            sources=sources_meta,
+            ai={
+                "provider": result.provider,
+                "model": result.model,
+                "fallback_used": result.fallback_used,
+            },
+        )
