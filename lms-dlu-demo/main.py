@@ -63,6 +63,8 @@ from backend.services.ai.deepseek_provider import DeepSeekProvider
 from backend.services.ai.grounded_chat import GroundedChatService
 from backend.services.ai.orchestrator import AIOrchestrator
 from grounded_chat_router import create_grounded_chat_router
+from moodle_adapter import MoodleAdapter
+from moodle_ingestion_router import create_moodle_ingestion_router
 
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
@@ -101,6 +103,12 @@ DEEPTUTOR_DIR = str(DEEPTUTOR_CONFIG.deeptutor_dir)
 DEEPTUTOR_EXE = str(DEEPTUTOR_CONFIG.executable)
 
 app.include_router(create_deeptutor_router(DEEPTUTOR_SERVICE))
+
+try:
+    MOODLE_ADAPTER = MoodleAdapter()
+except ValueError:
+    MOODLE_ADAPTER = None
+app.include_router(create_moodle_ingestion_router(MOODLE_ADAPTER, DEEPTUTOR_SERVICE))
 
 _deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
 GROUNDED_CHAT_SERVICE = (
