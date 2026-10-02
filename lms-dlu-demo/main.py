@@ -129,7 +129,8 @@ GROUNDED_CHAT_SERVICE = (
 app.include_router(create_grounded_chat_router(DEEPTUTOR_SERVICE, GROUNDED_CHAT_SERVICE))
 app.include_router(create_readiness_router(DEEPTUTOR_SERVICE, _ollama_provider, MOODLE_ADAPTER))
 
-
+from lms_chat_router import router as chat_ui_router
+app.include_router(chat_ui_router)
 # ==============================================================================
 # 6. DATABASE CONNECTION
 # ==============================================================================
