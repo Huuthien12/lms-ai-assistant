@@ -1,23 +1,22 @@
-from fastapi import APIRouter
-from pydantic import BaseModel
-from deeptutor_client import DeepTutorAPIClient, MockDeepTutorClient, RealDeepTutorClient
-# Cấu hình dùng Mock tạm thời
-USE_MOCK_API = True
-api_client: DeepTutorAPIClient = MockDeepTutorClient() if USE_MOCK_API else RealDeepTutorClient()
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+
+from deeptutor_client import DeepTutorAPIClient, create_deeptutor_client
 
 router = APIRouter(tags=["lms-chat-ui"])
 
 class ChatRequest(BaseModel):
-    query: str
-    kb_name: str
-    session_id: str = "default"
+    question: str = Field(min_length=1)
+    course_id: str = Field(min_length=1)
+    kb_name: str | None = None
+
+
+def get_client() -> DeepTutorAPIClient:
+    return create_deeptutor_client()
 
 @router.post("/lms/chat")
-def lms_student_chat(request: ChatRequest):
-    # Gọi hàm chat qua interface chung
-    result = api_client.chat(
-        query=request.query,
-        kb_name=request.kb_name,
-        session_id=request.session_id
-    )
-    return result
+def lms_student_chat(request: ChatRequest, client: DeepTutorAPIClient = Depends(get_client)):
+    try:
+        return client.chat(request.question, request.course_id, request.kb_name)
+    except Exception as exc:
+        raise HTTPException(502, detail={"code": "deeptutor_unavailable", "message": "DeepTutor is unavailable."}) from exc
