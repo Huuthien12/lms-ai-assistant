@@ -38,8 +38,9 @@ class SubmitAttemptRequest(BaseModel):
 
 
 class QuizRepository:
-    def __init__(self, connect: Callable[[], Any]):
+    def __init__(self, connect: Callable[[], Any], evidence: Any = None):
         self.connect = connect
+        self.evidence = evidence
 
     def ensure_schema(self) -> None:
         with self.connect() as conn:
@@ -143,7 +144,7 @@ class QuizRepository:
             cursor = conn.cursor()
             try:
                 cursor.execute("SET XACT_ABORT ON; SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;")
-                row = cursor.execute("SELECT quiz_id, status FROM dbo.QuizAttempts WITH (UPDLOCK, HOLDLOCK) WHERE attempt_id=?", attempt_id).fetchone()
+                row = cursor.execute("SELECT quiz_id, status, student_id, course_id FROM dbo.QuizAttempts WITH (UPDLOCK, HOLDLOCK) WHERE attempt_id=?", attempt_id).fetchone()
                 if row is None:
                     raise ValueError("attempt_not_found")
                 if row[1] != "IN_PROGRESS":
@@ -156,6 +157,8 @@ class QuizRepository:
                 now = datetime.now(timezone.utc).replace(tzinfo=None)
                 for result in graded["results"]:
                     cursor.execute("INSERT INTO dbo.QuizAnswers VALUES (?, ?, ?, ?)", attempt_id, result["question_id"], result["selected_option_id"], result["correct"])
+                if self.evidence is not None:
+                    self.evidence.record_quiz(cursor, attempt_id=attempt_id, student_id=row[2], course_id=row[3], topic=quiz["topic"], results=graded["results"])
                 cursor.execute("UPDATE dbo.QuizAttempts SET status='SUBMITTED', submitted_at=? WHERE attempt_id=? AND status='IN_PROGRESS'", now, attempt_id)
                 if cursor.rowcount != 1:
                     raise ValueError("already_submitted")

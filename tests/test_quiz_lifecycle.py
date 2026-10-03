@@ -15,6 +15,7 @@ from quiz_lifecycle import (  # noqa: E402
 )
 from backend.services.ai.grading_service import GradingService  # noqa: E402
 from backend.services.ai.quiz_service import QuizService  # noqa: E402
+from learning_evidence import FlashcardRegistration, FlashcardReviewRequest, LearningEvidenceRepository  # noqa: E402
 
 
 QUESTIONS = [{
@@ -201,3 +202,83 @@ def test_submit_projection_drops_untrusted_grader_fields_recursively():
         elif isinstance(value, list):
             for nested in value: walk(nested)
     walk(public)
+
+
+class EvidenceConnection:
+    def __init__(self, state): self.state, self.snapshot = state, None
+    def __enter__(self): return self
+    def __exit__(self, *_): return False
+    def cursor(self): return EvidenceCursor(self)
+    def commit(self): self.snapshot = None
+    def rollback(self):
+        if self.snapshot is not None: self.state.clear(); self.state.update(self.snapshot); self.snapshot = None
+
+
+class EvidenceCursor:
+    def __init__(self, conn): self.conn, self.result, self.rowcount = conn, None, 0
+    def execute(self, sql, *values):
+        sql, s = " ".join(sql.split()), self.conn.state
+        if sql.startswith("SET XACT_ABORT"): self.conn.snapshot = copy.deepcopy(s)
+        elif sql.startswith("SELECT course_id, topic FROM dbo.Flashcards"):
+            row = s["cards"].get(values[0]); self.result = Row(row) if row else None
+        elif sql.startswith("INSERT INTO dbo.Flashcards"):
+            s["cards"][values[0]] = (values[1], values[2])
+        elif sql.startswith("SELECT student_id, flashcard_id, rating FROM dbo.FlashcardReviews"):
+            review = s["reviews"].get(values[0]); self.result = Row((review[0], review[1], review[2])) if review else None
+        elif sql.startswith("INSERT INTO dbo.FlashcardReviews"):
+            if s.get("fail_review"): raise RuntimeError("review failure")
+            s["reviews"][values[0]] = values[1:]
+        elif sql.startswith("INSERT INTO dbo.LearningEvents"):
+            if s.get("fail_event"): raise RuntimeError("event failure")
+            kind = "quiz" if "QUIZ_ANSWER" in sql else "flashcard"
+            s["events"].append({"student_id": values[1], "course_id": values[2], "topic": values[3], "type": kind, "correct": values[5] if kind == "quiz" else None, "rating": values[5] if kind == "flashcard" else None})
+        elif sql.startswith("SELECT event_type, correct, rating FROM dbo.LearningEvents"):
+            events = [e for e in s["events"] if (e["student_id"], e["course_id"], e["topic"]) == values]
+            self.result = [Row(("QUIZ_ANSWER" if e["type"] == "quiz" else "FLASHCARD_REVIEW", e["correct"], e["rating"])) for e in events]
+        elif sql.startswith("UPDATE dbo.TopicMastery"):
+            key = (values[5], values[6], values[7]); self.rowcount = int(key in s["mastery"])
+            if self.rowcount: s["mastery"][key] = values[:5]
+        elif sql.startswith("INSERT INTO dbo.TopicMastery"):
+            s["mastery"][(values[1], values[2], values[3])] = values[4:9]
+        elif sql.startswith("SELECT topic, mastery_score"):
+            rows = [(topic, *value) for (student, course, topic), value in s["mastery"].items() if student == values[0] and course == values[1] and (len(values) == 2 or topic == values[2])]
+            self.result = [Row(row) for row in rows]
+        return self
+    def fetchone(self): return self.result
+    def fetchall(self): return self.result or []
+
+
+def evidence_repo():
+    state = {"cards": {}, "reviews": {}, "events": [], "mastery": {}}
+    return state, LearningEvidenceRepository(lambda: EvidenceConnection(state))
+
+
+def test_flashcard_registry_review_idempotency_and_server_scope():
+    state, repo = evidence_repo()
+    repo.register_flashcard(FlashcardRegistration(flashcard_id="card-1", course_id="course-1", topic="topic-1"))
+    repo.register_flashcard(FlashcardRegistration(flashcard_id="card-1", course_id="course-1", topic="topic-1"))
+    result = repo.review("card-1", FlashcardReviewRequest(student_id="student-1", rating="GOOD", review_id="review-1"))
+    assert result["mastery"]["mastery_score"] == 75
+    assert state["events"] == [{"student_id": "student-1", "course_id": "course-1", "topic": "topic-1", "type": "flashcard", "correct": None, "rating": "GOOD"}]
+    assert repo.review("card-1", FlashcardReviewRequest(student_id="student-1", rating="GOOD", review_id="review-1"))["status"] == "RECORDED"
+    assert len(state["reviews"]) == len(state["events"]) == 1
+    with pytest.raises(ValueError, match="idempotency_conflict"):
+        repo.review("card-1", FlashcardReviewRequest(student_id="student-2", rating="GOOD", review_id="review-1"))
+    with pytest.raises(ValueError, match="idempotency_conflict"):
+        repo.review("card-1", FlashcardReviewRequest(student_id="student-1", rating="EASY", review_id="review-1"))
+
+
+def test_unknown_card_and_event_failure_roll_back_review_path():
+    state, repo = evidence_repo()
+    with pytest.raises(ValueError, match="flashcard_not_found"):
+        repo.review("forged", FlashcardReviewRequest(student_id="student-1", rating="GOOD", review_id="review-1"))
+    assert not state["reviews"] and not state["events"] and not state["mastery"]
+    repo.register_flashcard(FlashcardRegistration(flashcard_id="card-1", course_id="course-1", topic="topic-1")); state["fail_event"] = True
+    with pytest.raises(ValueError, match="persistence_failure"):
+        repo.review("card-1", FlashcardReviewRequest(student_id="student-1", rating="GOOD", review_id="review-1"))
+    assert not state["reviews"] and not state["events"] and not state["mastery"]
+
+
+def test_review_request_forbids_client_mastery_and_scope_fields():
+    with pytest.raises(Exception):
+        FlashcardReviewRequest(student_id="student", rating="GOOD", review_id="review", course_id="forged")
