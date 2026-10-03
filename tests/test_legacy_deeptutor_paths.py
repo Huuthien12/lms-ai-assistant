@@ -38,17 +38,6 @@ def test_legacy_status_hides_runtime_errors(monkeypatch):
     assert "secret" not in str(response).lower()
 
 
-def test_legacy_chat_hides_source_paths(monkeypatch):
-    service = MagicMock()
-    service.query.return_value = {
-        "kb_id": "int1339-python",
-        "result": {"answer": "Grounded answer", "sources": [{
-            "title": "chapter.pdf", "page": 1, "score": 0.9, "source": "D:/private/staging.pdf",
-        }]},
-    }
-    monkeypatch.setattr(lms_main, "DEEPTUTOR_SERVICE", service)
-
-    response = lms_main.ask_deeptutor("INT1339", "Question")
-
-    assert response["sources"] == [{"title": "chapter.pdf", "page": 1, "score": 0.9}]
-    assert "private" not in str(response).lower()
+def test_legacy_public_chat_route_is_retired():
+    assert "/chat" not in {getattr(route, "path", None) for route in lms_main.app.routes}
+    assert not hasattr(lms_main, "ask_deeptutor")

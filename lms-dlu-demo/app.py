@@ -252,7 +252,7 @@ def api_get(endpoint, timeout=15):
         return {
             "success": False,
             "data": None,
-            "error": f"HTTP {response.status_code}: {response.text}"
+            "error": f"Backend returned HTTP {response.status_code}."
         }
 
     except requests.exceptions.ConnectionError:
@@ -271,12 +271,12 @@ def api_get(endpoint, timeout=15):
             "error": "Backend phản hồi quá lâu."
         }
 
-    except Exception as e:
+    except Exception:
 
         return {
             "success": False,
             "data": None,
-            "error": str(e)
+            "error": "Backend response could not be processed."
         }
 
 
@@ -309,7 +309,7 @@ def api_post(
         return {
             "success": False,
             "data": None,
-            "error": f"HTTP {response.status_code}: {response.text}"
+            "error": f"Backend returned HTTP {response.status_code}."
         }
 
     except requests.exceptions.ConnectionError:
@@ -328,12 +328,12 @@ def api_post(
             "error": "Backend phản hồi quá lâu."
         }
 
-    except Exception as e:
+    except Exception:
 
         return {
             "success": False,
             "data": None,
-            "error": str(e)
+            "error": "Backend response could not be processed."
         }
 
 
@@ -1403,14 +1403,8 @@ else:
                     )
 
                 chat_payload = {
-                    "student_id":
-                        st.session_state.user_id,
-
-                    "course_id":
-                        course_id,
-
-                    "message":
-                        prompt
+                    "question": prompt,
+                    "course_id": course_id,
                 }
 
                 with st.chat_message(
@@ -1422,7 +1416,7 @@ else:
                     ):
 
                         chat_result = api_post(
-                            "/chat",
+                            "/lms/chat",
                             json_data=chat_payload,
                             timeout=120
                         )
@@ -1435,7 +1429,7 @@ else:
 
                         answer = (
                             response_data.get(
-                                "response"
+                                "answer"
                             )
                             or
                             response_data.get(
@@ -1460,6 +1454,18 @@ else:
                                 "content": answer
                             }
                         )
+
+                        for source in response_data.get("sources", []):
+                            if isinstance(source, dict):
+                                title = source.get("title") or source.get("source_id")
+                                if isinstance(title, str) and title:
+                                    st.caption(f"Source: {title}")
+
+                        ai = response_data.get("ai")
+                        if isinstance(ai, dict):
+                            provider, model = ai.get("provider"), ai.get("model")
+                            if isinstance(provider, str) and isinstance(model, str):
+                                st.caption(f"{response_data.get('kb_name', '')} · {provider} / {model}")
 
                         # Backend hiện tại có thể đang
                         # ở trạng thái chưa kết nối DeepTutor thật.

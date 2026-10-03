@@ -26,7 +26,7 @@ from typing import Optional
 
 app = FastAPI(
     title="LMS DeepTutor API",
-    description="Backend LMS Đại học Đà Lạt tích hợp DeepTutor",
+    description="Backend LMS D?i h?c D? L?t t?ch h?p DeepTutor",
     version="2.0.0"
 )
 
@@ -58,7 +58,7 @@ if PROJECT_ROOT not in sys.path:
 
 from deeptutor_integration import DeepTutorConfig, DeepTutorService
 from deeptutor_integration.api import create_router as create_deeptutor_router
-from deeptutor_integration.contracts import DocumentInput, QueryInput
+from deeptutor_integration.contracts import DocumentInput
 from deeptutor_integration.errors import DeepTutorError
 from backend.services.ai.deepseek_provider import DeepSeekProvider
 from backend.services.ai.fallback_provider import FallbackAIProvider
@@ -161,7 +161,7 @@ def get_connection():
     except Exception as e:
 
         raise Exception(
-            f"Không thể kết nối SQL Server: {e}"
+            f"Kh?ng th? k?t n?i SQL Server: {e}"
         )
 
 
@@ -190,8 +190,6 @@ def row_to_dict(cursor, row):
             row
         )
     )
-
-
 def safe_filename(filename: str):
 
     filename = os.path.basename(
@@ -216,7 +214,7 @@ def check_deeptutor_executable():
     ):
 
         raise RuntimeError(
-            "Không tìm thấy DeepTutor executable tại: "
+            "Kh?ng t?m th?y DeepTutor executable t?i: "
             f"{DEEPTUTOR_EXE}"
         )
 
@@ -225,12 +223,12 @@ def run_deeptutor_command(
     timeout: int = 300
 ):
     """
-    Chạy DeepTutor CLI từ FastAPI.
+    Ch?y DeepTutor CLI t? FastAPI.
 
-    Quan trọng trên Windows:
-    - ép Python subprocess dùng UTF-8
-    - ép stdout/stderr UTF-8
-    - tắt Rich color/terminal detection
+    Quan tr?ng tr?n Windows:
+    - ?p Python subprocess d?ng UTF-8
+    - ?p stdout/stderr UTF-8
+    - t?t Rich color/terminal detection
     """
 
     check_deeptutor_executable()
@@ -240,15 +238,15 @@ def run_deeptutor_command(
         *args
     ]
 
-    # Lấy environment hiện tại để DeepTutor vẫn đọc được
-    # các API key/config đang có.
+    # L?y environment hi?n t?i d? DeepTutor v?n d?c du?c
+    # c?c API key/config dang c?.
     env = os.environ.copy()
 
-    # Bắt buộc Python của DeepTutor dùng UTF-8
+    # B?t bu?c Python c?a DeepTutor d?ng UTF-8
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
 
-    # Giúp Rich không xử lý subprocess như Windows terminal cũ.
+    # Gi?p Rich kh?ng x? ly subprocess nhu Windows terminal cu.
     env["TERM"] = "dumb"
     env["NO_COLOR"] = "1"
 
@@ -272,8 +270,8 @@ def run_deeptutor_command(
 
             shell=False,
 
-            # Quan trọng trên Windows:
-            # không mở cửa sổ console mới.
+            # Quan tr?ng tr?n Windows:
+            # kh?ng m? c?a s? console m?i.
             creationflags=(
                 subprocess.CREATE_NO_WINDOW
                 if os.name == "nt"
@@ -286,13 +284,13 @@ def run_deeptutor_command(
     except subprocess.TimeoutExpired:
 
         raise RuntimeError(
-            "DeepTutor xử lý quá thời gian cho phép."
+            "DeepTutor x? ly qu? th?i gian cho ph?p."
         )
 
     except Exception as e:
 
         raise RuntimeError(
-            f"Không thể chạy DeepTutor: {e}"
+            f"Kh?ng th? ch?y DeepTutor: {e}"
         )
 
 
@@ -300,12 +298,12 @@ def get_deeptutor_kb_info(
     kb_name: str
 ):
     """
-    Lấy trạng thái thật của Knowledge Base.
+    L?y tr?ng th?i th?t c?a Knowledge Base.
 
     Return:
-        None -> KB chưa tồn tại
+        None -> KB chua t?n t?i
 
-        dict -> KB tồn tại, chứa:
+        dict -> KB t?n t?i, ch?a:
             status
             rag_initialized
             raw_documents
@@ -321,7 +319,7 @@ def get_deeptutor_kb_info(
         timeout=60
     )
 
-    # Command lỗi -> coi như KB chưa tồn tại
+    # Command l?i -> coi nhu KB chua t?n t?i
     if result.returncode != 0:
         return None
 
@@ -341,7 +339,7 @@ def deeptutor_kb_exists(
     kb_name: str
 ) -> bool:
     """
-    Chỉ kiểm tra KB có tồn tại hay không.
+    Ch? ki?m tra KB c? t?n t?i hay kh?ng.
     """
 
     info = get_deeptutor_kb_info(
@@ -355,7 +353,7 @@ def deeptutor_kb_is_ready(
     kb_name: str
 ) -> bool:
     """
-    KB chỉ được xem là sử dụng được khi:
+    KB ch? du?c xem l? s? d?ng du?c khi:
     - status = ready
     - rag_initialized = true
     """
@@ -392,14 +390,14 @@ def index_document_to_deeptutor(
     document_path: str
 ):
     """
-    Đồng bộ tài liệu LMS vào DeepTutor.
+    D?ng b? t?i li?u LMS v?o DeepTutor.
 
-    Quy tắc:
-    - KB chưa có -> CREATE
-    - Ghost KB (unknown, 0 docs, RAG false, không index) -> CREATE
+    Quy t?c:
+    - KB chua c? -> CREATE
+    - Ghost KB (unknown, 0 docs, RAG false, kh?ng index) -> CREATE
     - KB ready -> ADD
-    - KB processing -> báo đang xử lý
-    - KB lỗi -> không tự động ghi đè
+    - KB processing -> b?o dang x? ly
+    - KB l?i -> kh?ng t? d?ng ghi d?
     """
 
     kb_name = get_kb_name(course_id)
@@ -410,11 +408,11 @@ def index_document_to_deeptutor(
 
     if not os.path.exists(document_path):
         raise RuntimeError(
-            f"Không tìm thấy file để index: {document_path}"
+            f"Kh?ng t?m th?y file d? index: {document_path}"
         )
 
     # ==========================================================
-    # 1. KIỂM TRA KB
+    # 1. KI?M TRA KB
     # ==========================================================
 
     kb_info = get_deeptutor_kb_info(
@@ -424,7 +422,7 @@ def index_document_to_deeptutor(
     kb_should_create = False
 
     # ==========================================================
-    # 2. KB KHÔNG TỒN TẠI
+    # 2. KB KHONG T?N T?I
     # ==========================================================
 
     if kb_info is None:
@@ -468,16 +466,16 @@ def index_document_to_deeptutor(
         # ======================================================
         # GHOST KB
         #
-        # DeepTutor có thể trả về:
+        # DeepTutor c? th? tr? v?:
         #
         # status = unknown
         # raw_documents = 0
         # rag_initialized = false
         # index_versions = []
         #
-        # dù KB chưa thực sự được khởi tạo.
+        # d? KB chua th?c s? du?c kh?i t?o.
         #
-        # Trường hợp này coi như KB chưa tồn tại.
+        # Tru?ng h?p n?y coi nhu KB chua t?n t?i.
         # ======================================================
 
         if (
@@ -509,7 +507,7 @@ def index_document_to_deeptutor(
         )
 
     # ==========================================================
-    # 4. KB ĐÃ TỒN TẠI
+    # 4. KB DA T?N T?I
     # ==========================================================
 
     else:
@@ -561,8 +559,8 @@ def index_document_to_deeptutor(
 
             raise RuntimeError(
                 f"Knowledge Base {kb_name} "
-                "đang xử lý tài liệu. "
-                "Vui lòng chờ quá trình index hoàn tất."
+                "dang x? ly t?i li?u. "
+                "Vui l?ng ch? qu? tr?nh index ho?n t?t."
             )
 
         # ------------------------------------------------------
@@ -572,14 +570,14 @@ def index_document_to_deeptutor(
         else:
 
             raise RuntimeError(
-                f"Knowledge Base {kb_name} tồn tại "
-                f"nhưng chưa sẵn sàng "
+                f"Knowledge Base {kb_name} t?n t?i "
+                f"nhung chua s?n s?ng "
                 f"(status={status}, "
                 f"rag_initialized={rag_initialized})."
             )
 
     # ==========================================================
-    # 5. KIỂM TRA LỆNH CREATE / ADD
+    # 5. KI?M TRA L?NH CREATE / ADD
     # ==========================================================
 
     if result.returncode != 0:
@@ -587,17 +585,17 @@ def index_document_to_deeptutor(
         error_message = (
             result.stderr.strip()
             or result.stdout.strip()
-            or "DeepTutor không trả về thông báo lỗi."
+            or "DeepTutor kh?ng tr? v? th?ng b?o l?i."
         )
 
         raise RuntimeError(
-            f"DeepTutor {action} tài liệu thất bại "
+            f"DeepTutor {action} t?i li?u th?t b?i "
             f"trong {kb_name}: "
             f"{error_message}"
         )
 
     # ==========================================================
-    # 6. KIỂM TRA KB SAU KHI INDEX
+    # 6. KI?M TRA KB SAU KHI INDEX
     # ==========================================================
 
     final_info = get_deeptutor_kb_info(
@@ -607,8 +605,8 @@ def index_document_to_deeptutor(
     if not final_info:
 
         raise RuntimeError(
-            f"DeepTutor đã chạy {action} nhưng "
-            f"không đọc được trạng thái của {kb_name}."
+            f"DeepTutor da ch?y {action} nhung "
+            f"kh?ng d?c du?c tr?ng th?i c?a {kb_name}."
         )
 
     final_status = str(
@@ -638,7 +636,7 @@ def index_document_to_deeptutor(
     )
 
     # ==========================================================
-    # 7. CHỈ THÀNH CÔNG KHI KB READY
+    # 7. CH? THANH CONG KHI KB READY
     # ==========================================================
 
     if (
@@ -647,9 +645,9 @@ def index_document_to_deeptutor(
     ):
 
         raise RuntimeError(
-            f"Tài liệu đã được gửi vào DeepTutor "
-            f"nhưng Knowledge Base {kb_name} "
-            f"chưa sẵn sàng "
+            f"T?i li?u da du?c g?i v?o DeepTutor "
+            f"nhung Knowledge Base {kb_name} "
+            f"chua s?n s?ng "
             f"(status={final_status}, "
             f"rag_initialized={final_rag_initialized})."
         )
@@ -667,223 +665,13 @@ def index_document_to_deeptutor(
         "rag_initialized": final_rag_initialized,
         "raw_documents": raw_documents,
         "message": (
-            f"Đã tạo Knowledge Base và index "
-            f"{kb_name} thành công."
+            f"Da t?o Knowledge Base v? index "
+            f"{kb_name} th?nh c?ng."
             if action == "create"
             else
-            f"Đã thêm tài liệu vào Knowledge Base "
-            f"{kb_name} thành công."
+            f"Da th?m t?i li?u v?o Knowledge Base "
+            f"{kb_name} th?nh c?ng."
         )
-    }
-
-
-def ask_deeptutor(
-    course_id: str,
-    message: str
-):
-
-    kb_name = get_kb_name(
-        course_id
-    )
-
-    # --------------------------------------------------------------------------
-    # Kiểm tra KB
-    # --------------------------------------------------------------------------
-
-    if not deeptutor_kb_exists(
-        kb_name
-    ):
-
-        raise RuntimeError(
-            f"Môn {course_id} chưa có Knowledge Base "
-            f"({kb_name}). "
-            "Giảng viên cần upload tài liệu trước."
-        )
-
-    # --------------------------------------------------------------------------
-    # DeepTutor Chat + RAG
-    # --------------------------------------------------------------------------
-
-    rag_question = f"""
-    Bạn là trợ lý học tập AI dành cho sinh viên.
-
-    Hãy trả lời câu hỏi của sinh viên hoàn toàn bằng tiếng Việt.
-
-    Yêu cầu bắt buộc:
-    - Chỉ sử dụng thông tin từ tài liệu được truy xuất trong Knowledge Base.
-    - Trả lời hoàn toàn bằng tiếng Việt.
-    - Tiêu đề, phần giải thích và kết luận đều phải bằng tiếng Việt.
-    - Không mở đầu câu trả lời bằng tiếng Anh.
-    - Các thuật ngữ chuyên ngành bằng tiếng Anh có thể giữ nguyên,
-    nhưng phải giải thích bằng tiếng Việt khi cần thiết.
-    - Trình bày rõ ràng, dễ hiểu và phù hợp với sinh viên.
-    - Ưu tiên trả lời trực tiếp vào câu hỏi, không viết dài dòng không cần thiết.
-    - Có thể sử dụng Markdown để trình bày danh sách, tiêu đề hoặc nhấn mạnh.
-    - Nếu thông tin có trong tài liệu, hãy trả lời dựa trên nội dung đó.
-    - Nếu tài liệu không chứa đủ thông tin để trả lời, hãy nói rõ:
-    "Không tìm thấy đủ thông tin này trong tài liệu môn học."
-    - Không tự bịa thêm thông tin không có trong tài liệu.
-
-    Câu hỏi của sinh viên:
-    {message}
-    """
-
-    result = run_deeptutor_command(
-        [
-            "run",
-            "chat",
-            rag_question,
-            "--tool",
-            "rag",
-            "--kb",
-            kb_name,
-            "--language",
-            "vi",
-            "--format",
-            "json"
-        ],
-        timeout=300
-    )
-    if result.returncode != 0:
-
-        error_message = (
-            result.stderr.strip()
-            or result.stdout.strip()
-            or "DeepTutor không trả về thông báo lỗi."
-        )
-
-        raise RuntimeError(
-            f"DeepTutor chat thất bại: "
-            f"{error_message}"
-        )
-
-    # --------------------------------------------------------------------------
-    # Parse JSON Lines
-    # --------------------------------------------------------------------------
-
-    bot_response = None
-
-    session_id = None
-
-    sources = []
-
-    for line in result.stdout.splitlines():
-
-        line = line.strip()
-
-        if not line:
-
-            continue
-
-        try:
-
-            event = json.loads(
-                line
-            )
-
-        except json.JSONDecodeError:
-
-            # DeepTutor đôi khi có log không phải JSON.
-            # Ta bỏ qua log đó.
-            continue
-
-        event_type = event.get(
-            "type"
-        )
-
-        # ----------------------------------------------------------------------
-        # SESSION
-        # ----------------------------------------------------------------------
-
-        if event_type == "session":
-
-            session_id = (
-                event
-                .get("metadata", {})
-                .get("session_id")
-            )
-
-            if not session_id:
-
-                session_id = event.get(
-                    "session_id"
-                )
-
-        # ----------------------------------------------------------------------
-        # SOURCES
-        # ----------------------------------------------------------------------
-
-        elif event_type == "sources":
-
-            sources = (
-                event
-                .get("metadata", {})
-                .get("sources", [])
-            )
-
-        # ----------------------------------------------------------------------
-        # FINAL RESULT
-        # ----------------------------------------------------------------------
-
-        elif event_type == "result":
-
-            bot_response = (
-                event
-                .get("metadata", {})
-                .get("response")
-            )
-
-            if not session_id:
-
-                session_id = event.get(
-                    "session_id"
-                )
-
-    # --------------------------------------------------------------------------
-    # Không tìm được result
-    # --------------------------------------------------------------------------
-
-    if not bot_response:
-
-        raise RuntimeError(
-            "DeepTutor đã chạy nhưng backend "
-            "không tìm thấy response trong JSON output."
-        )
-
-    # --------------------------------------------------------------------------
-    # Làm sạch sources trước khi trả về frontend
-    # --------------------------------------------------------------------------
-
-    clean_sources = []
-
-    for source in sources:
-
-        clean_sources.append(
-            {
-                "title": source.get(
-                    "title"
-                ),
-
-                "page": source.get(
-                    "page"
-                ),
-
-                "score": source.get(
-                    "score"
-                ),
-
-                "kb_name": source.get(
-                    "kb_name",
-                    kb_name
-                )
-            }
-        )
-
-    return {
-        "response": bot_response,
-        "session_id": session_id,
-        "kb_name": kb_name,
-        "sources": clean_sources
     }
 
 
@@ -904,32 +692,6 @@ def index_document_to_deeptutor(course_id: str, document_path: str):
             source="lms-demo",
         )
     )
-
-
-def ask_deeptutor(course_id: str, message: str):
-    query_result = DEEPTUTOR_SERVICE.query(
-        QueryInput(course_id=course_id, question=message)
-    )
-    result = query_result["result"]
-    response = (
-        result.get("response")
-        or result.get("answer")
-        or result.get("content")
-        or result.get("text")
-    )
-    if not isinstance(response, str) or not response.strip():
-        raise RuntimeError("DeepTutor returned no textual response.")
-    sources = result.get("sources") or result.get("documents") or []
-    return {
-        "response": response,
-        "session_id": result.get("session_id"),
-        "kb_name": query_result["kb_id"],
-        "sources": [
-            {key: source.get(key) for key in ("title", "page", "score")}
-            for source in sources
-            if isinstance(source, dict)
-        ] if isinstance(sources, list) else [],
-    }
 
 
 # ==============================================================================
@@ -969,7 +731,7 @@ def root():
 
     return {
         "status": "ok",
-        "message": "LMS DeepTutor Backend đang hoạt động",
+        "message": "LMS DeepTutor Backend dang ho?t d?ng",
         "database": DATABASE,
         "deeptutor_connected": deeptutor_available
     }
@@ -1000,7 +762,7 @@ def database_test():
 
         return {
             "status": "success",
-            "message": "Kết nối SQL Server thành công",
+            "message": "K?t n?i SQL Server th?nh c?ng",
             "database": database_name,
             "server": SERVER
         }
@@ -1165,7 +927,7 @@ def get_course(
 
             raise HTTPException(
                 status_code=404,
-                detail="Không tìm thấy môn học."
+                detail="Kh?ng t?m th?y m?n h?c."
             )
 
         course = row_to_dict(
@@ -1387,7 +1149,7 @@ def check_material(
 
             raise HTTPException(
                 status_code=404,
-                detail="Không tìm thấy tài liệu."
+                detail="Kh?ng t?m th?y t?i li?u."
             )
 
         material = row_to_dict(
@@ -1480,7 +1242,7 @@ async def upload_material(
             raise HTTPException(
                 status_code=404,
                 detail=(
-                    f"Không tìm thấy môn học "
+                    f"Kh?ng t?m th?y m?n h?c "
                     f"{course_id}."
                 )
             )
@@ -1493,7 +1255,7 @@ async def upload_material(
 
             raise HTTPException(
                 status_code=400,
-                detail="File không hợp lệ."
+                detail="File kh?ng h?p l?."
             )
 
         filename = safe_filename(
@@ -1515,7 +1277,7 @@ async def upload_material(
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "Chỉ hỗ trợ PDF, DOCX và TXT."
+                    "Ch? h? tr? PDF, DOCX v? TXT."
                 )
             )
 
@@ -1614,8 +1376,8 @@ async def upload_material(
         # ----------------------------------------------------------------------
         # INDEX INTO DEEPTUTOR
         #
-        # SQL/file đã lưu thành công trước.
-        # Nếu DeepTutor lỗi, tài liệu LMS vẫn được giữ.
+        # SQL/file da luu th?nh c?ng tru?c.
+        # N?u DeepTutor l?i, t?i li?u LMS v?n du?c gi?.
         # ----------------------------------------------------------------------
 
         deeptutor_indexed = False
@@ -1661,7 +1423,7 @@ async def upload_material(
             "status": "success",
 
             "message": (
-                "Upload tài liệu thành công"
+                "Upload t?i li?u th?nh c?ng"
             ),
 
             "material_id": material_id,
@@ -1930,320 +1692,6 @@ def get_course_kb_status(
         ) from exc
 
 
-# 23. CHAT WITH REAL DEEPTUTOR
-# ==============================================================================
-
-@app.post(
-    "/chat"
-)
-def chat_with_deeptutor(
-    request: ChatRequest
-):
-
-    connection = None
-
-    try:
-
-        # ----------------------------------------------------------------------
-        # MESSAGE
-        # ----------------------------------------------------------------------
-
-        message = (
-            request.message.strip()
-        )
-
-        if not message:
-
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Câu hỏi không được để trống."
-                )
-            )
-
-        # ----------------------------------------------------------------------
-        # DATABASE
-        # ----------------------------------------------------------------------
-
-        connection = get_connection()
-
-        cursor = connection.cursor()
-
-        # ----------------------------------------------------------------------
-        # CHECK STUDENT
-        # ----------------------------------------------------------------------
-
-        cursor.execute(
-            """
-            SELECT
-                user_id,
-                full_name,
-                role
-            FROM Users
-            WHERE user_id = ?
-            """,
-            request.student_id
-        )
-
-        student = cursor.fetchone()
-
-        if not student:
-
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    f"Không tìm thấy sinh viên "
-                    f"{request.student_id}."
-                )
-            )
-
-        if str(
-            student[2]
-        ).lower() != "student":
-
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Tài khoản "
-                    f"{request.student_id} "
-                    f"không phải sinh viên."
-                )
-            )
-
-        # ----------------------------------------------------------------------
-        # CHECK COURSE
-        # ----------------------------------------------------------------------
-
-        cursor.execute(
-            """
-            SELECT
-                course_id,
-                course_name
-            FROM Courses
-            WHERE course_id = ?
-            """,
-            request.course_id
-        )
-
-        course = cursor.fetchone()
-
-        if not course:
-
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    f"Không tìm thấy môn học "
-                    f"{request.course_id}."
-                )
-            )
-
-        course_name = course[1]
-
-        # ----------------------------------------------------------------------
-        # GET MATERIALS
-        # ----------------------------------------------------------------------
-
-        cursor.execute(
-            """
-            SELECT
-                material_id,
-                file_name,
-                file_path
-            FROM Materials
-            WHERE course_id = ?
-            ORDER BY uploaded_at DESC
-            """,
-            request.course_id
-        )
-
-        material_rows = (
-            cursor.fetchall()
-        )
-
-        material_names = [
-            material[1]
-            for material in material_rows
-        ]
-
-        # ----------------------------------------------------------------------
-        # Kiểm tra ít nhất LMS có tài liệu
-        # ----------------------------------------------------------------------
-
-        if not material_names:
-
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Môn học này chưa có tài liệu. "
-                    "Giảng viên cần upload tài liệu "
-                    "trước khi sử dụng DeepTutor."
-                )
-            )
-
-        # ----------------------------------------------------------------------
-        # CALL DEEPTUTOR
-        # ----------------------------------------------------------------------
-
-        try:
-
-            deeptutor_result = (
-                ask_deeptutor(
-                    course_id=request.course_id,
-                    message=message
-                )
-            )
-
-        except DeepTutorError as exc:
-
-            raise HTTPException(
-                status_code=exc.status_code,
-                detail=exc.as_dict()
-            ) from exc
-
-        except Exception as exc:
-
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "code": "deeptutor_unavailable",
-                    "message": "DeepTutor is unable to process the question."
-                }
-            ) from exc
-
-
-        bot_response = (
-            deeptutor_result[
-                "response"
-            ]
-        )
-
-        # ----------------------------------------------------------------------
-        # SAVE CHAT HISTORY
-        # ----------------------------------------------------------------------
-
-        cursor.execute(
-            """
-            INSERT INTO ChatHistory
-            (
-                student_id,
-                course_id,
-                user_message,
-                bot_response,
-                created_at
-            )
-            OUTPUT INSERTED.chat_id
-            VALUES
-            (
-                ?,
-                ?,
-                ?,
-                ?,
-                GETDATE()
-            )
-            """,
-            request.student_id,
-            request.course_id,
-            message,
-            bot_response
-        )
-
-        chat_id = (
-            cursor.fetchone()[0]
-        )
-
-        connection.commit()
-
-        # ----------------------------------------------------------------------
-        # FINAL RESPONSE
-        # ----------------------------------------------------------------------
-
-        return {
-            "status": "success",
-
-            "chat_id": chat_id,
-
-            "student_id": (
-                request.student_id
-            ),
-
-            "course_id": (
-                request.course_id
-            ),
-
-            "course_name": (
-                course_name
-            ),
-
-            "question": message,
-
-            "response": bot_response,
-
-            "materials": (
-                material_names
-            ),
-
-            "deeptutor_connected": True,
-
-            "deeptutor": {
-
-                "kb_name": (
-                    deeptutor_result[
-                        "kb_name"
-                    ]
-                ),
-
-                "session_id": (
-                    deeptutor_result[
-                        "session_id"
-                    ]
-                ),
-
-                "sources": (
-                    deeptutor_result[
-                        "sources"
-                    ]
-                )
-            }
-        }
-
-    except HTTPException:
-
-        if connection:
-
-            try:
-
-                connection.rollback()
-
-            except Exception:
-
-                pass
-
-        raise
-
-    except Exception as e:
-
-        if connection:
-
-            try:
-
-                connection.rollback()
-
-            except Exception:
-
-                pass
-
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
-
-    finally:
-
-        if connection:
-
-            connection.close()
-
-# ==============================================================================
 # DELETE CHAT HISTORY
 # ==============================================================================
 
@@ -2260,7 +1708,7 @@ def delete_chat_history(
         connection = get_connection()
         cursor = connection.cursor()
 
-        # Kiểm tra có lịch sử chat không
+        # Ki?m tra c? l?ch s? chat kh?ng
         cursor.execute(
             """
             SELECT COUNT(*)
@@ -2277,11 +1725,11 @@ def delete_chat_history(
         if count == 0:
             return {
                 "status": "success",
-                "message": "Không có lịch sử chat để xóa.",
+                "message": "Kh?ng c? l?ch s? chat d? x?a.",
                 "deleted": 0
             }
 
-        # Xóa toàn bộ lịch sử của sinh viên trong môn này
+        # X?a to?n b? l?ch s? c?a sinh vi?n trong m?n n?y
         cursor.execute(
             """
             DELETE FROM ChatHistory
@@ -2296,7 +1744,7 @@ def delete_chat_history(
 
         return {
             "status": "success",
-            "message": "Đã xóa lịch sử chat.",
+            "message": "Da x?a l?ch s? chat.",
             "student_id": student_id,
             "course_id": course_id,
             "deleted": count
