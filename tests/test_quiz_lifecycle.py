@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).parents[1] / "lms-dlu-demo"))
 from quiz_lifecycle import (  # noqa: E402
     QuizDefinitionRequest, QuizRepository, StartAttemptRequest, _trusted_questions,
-    _validate_answers, create_quiz_router,
+    _validate_answers, _public_submission_result, create_quiz_router,
 )
 from backend.services.ai.grading_service import GradingService  # noqa: E402
 from backend.services.ai.quiz_service import QuizService  # noqa: E402
@@ -160,5 +160,44 @@ def test_http_contract_is_public_safe_and_sanitizes_errors():
         assert created.status_code == 200
         assert "correct_option_id" not in created.text and "explanation" not in created.text
         missing = client.post("/quiz-attempts/missing/submit", json={"answers": []})
-    assert missing.status_code == 404
+        assert missing.status_code == 404
     assert missing.json()["detail"] == {"code": "attempt_not_found", "message": "Quiz request could not be completed."}
+
+
+def test_http_submit_response_projects_only_grading_facts():
+    _, repo = state_repo()
+    app = FastAPI(); app.include_router(create_quiz_router(repo))
+    with TestClient(app) as client:
+        client.post("/internal/quizzes", json={
+            "quiz_id": "quiz-1", "course_id": "course-1", "topic": "topic",
+            "difficulty": "easy", "questions": QUESTIONS,
+        })
+        attempt = client.post("/quizzes/quiz-1/attempts", json={
+            "quiz_id": "quiz-1", "course_id": "course-1", "student_id": "student-1",
+        }).json()
+        response = client.post(f"/quiz-attempts/{attempt['attempt_id']}/submit", json={
+            "answers": [{"question_id": "q1", "selected_option_id": "a"}],
+        })
+    assert response.status_code == 200
+    assert response.json() == {
+        "attempt_id": attempt["attempt_id"], "status": "SUBMITTED",
+        "submitted_at": response.json()["submitted_at"], "score_percent": 100.0,
+        "correct_count": 1, "total_questions": 1,
+        "results": [{"question_id": "q1", "correct": True, "selected_option_id": "a"}],
+    }
+
+
+def test_submit_projection_drops_untrusted_grader_fields_recursively():
+    public = _public_submission_result("attempt", datetime.now(), {
+        "score_percent": 100, "correct_count": 1, "total_questions": 1,
+        "results": [{"question_id": "q1", "correct": True, "selected_option_id": "a",
+                     "correct_option_id": "a", "source_metadata": {"answer_key": "a"}}],
+        "trusted_quiz_definition": {"correct_answer": "a"},
+    })
+    def walk(value):
+        if isinstance(value, dict):
+            assert not ({"correct_option_id", "correct_answer", "answer_key", "trusted_quiz_definition", "source_metadata", "explanation"} & value.keys())
+            for nested in value.values(): walk(nested)
+        elif isinstance(value, list):
+            for nested in value: walk(nested)
+    walk(public)

@@ -64,7 +64,11 @@ class QuizRepository:
                     started_at DATETIME2 NOT NULL,
                     submitted_at DATETIME2 NULL
                 );
-                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_QuizAttempts_Active')
+                IF NOT EXISTS (
+                    SELECT 1 FROM sys.indexes
+                    WHERE object_id = OBJECT_ID(N'dbo.QuizAttempts')
+                      AND name = N'UX_QuizAttempts_Active'
+                )
                 CREATE UNIQUE INDEX UX_QuizAttempts_Active ON dbo.QuizAttempts(quiz_id, student_id)
                 WHERE status = 'IN_PROGRESS';
                 IF OBJECT_ID('dbo.QuizAnswers', 'U') IS NULL
@@ -162,7 +166,7 @@ class QuizRepository:
             except Exception:
                 conn.rollback()
                 raise ValueError("persistence_failure") from None
-        return {"attempt_id": attempt_id, "status": "SUBMITTED", "submitted_at": now, **graded}
+        return _public_submission_result(attempt_id, now, graded)
 
 
 def create_quiz_router(repository: QuizRepository) -> APIRouter:
@@ -236,3 +240,20 @@ def _validate_answers(questions: list[dict[str, Any]], answers: list[dict[str, A
         selected = answer.get("selected_option_id")
         if selected is not None and (not isinstance(selected, str) or selected not in known[question_id]):
             raise ValueError("invalid_option")
+
+
+def _public_submission_result(attempt_id: str, submitted_at: datetime, graded: dict[str, Any]) -> dict[str, Any]:
+    """Allowlist client-visible grading facts; trusted quiz data never crosses this boundary."""
+    return {
+        "attempt_id": attempt_id,
+        "status": "SUBMITTED",
+        "submitted_at": submitted_at,
+        "score_percent": graded["score_percent"],
+        "correct_count": graded["correct_count"],
+        "total_questions": graded["total_questions"],
+        "results": [
+            {"question_id": result["question_id"], "correct": result["correct"],
+             "selected_option_id": result["selected_option_id"]}
+            for result in graded["results"]
+        ],
+    }
