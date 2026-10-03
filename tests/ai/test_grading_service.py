@@ -34,7 +34,7 @@ def test_exact_grading_and_rounding(questions, selections, count, score):
         "score_percent": score, "correct_count": count, "total_questions": 3,
         "results": [
             {"question_id": q["question_id"], "correct": selected == "A",
-             "selected_option_id": selected, "correct_option_id": "A"}
+             "selected_option_id": selected}
             for q, selected in zip(questions, selections)
         ],
     }

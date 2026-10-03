@@ -39,7 +39,7 @@ class OllamaProvider(LLMProvider):
                 code = f"HTTP_{response.status_code}"
             else:
                 data = response.json()
-                if (not isinstance(data, dict) or data.get("done") is not True
+                if (not isinstance(data, dict) or data.get("done") is False
                         or not isinstance(data.get("message"), dict)
                         or not isinstance(data["message"].get("content"), str)
                         or not data["message"]["content"].strip()):

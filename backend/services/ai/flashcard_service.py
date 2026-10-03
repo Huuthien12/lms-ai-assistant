@@ -33,7 +33,8 @@ class FlashcardService:
             raise ValueError("INVALID_FLASHCARD_REQUEST: unsupported difficulty")
 
     def validate_and_parse_flashcards(
-        self, raw_content: Any, count: Optional[int] = None, source_metadata: Any = None
+        self, raw_content: Any, count: Optional[int] = None, source_metadata: Any = None,
+        trusted_topic: Optional[str] = None, trusted_difficulty: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Validate cards and ignore all model-generated source fields."""
         sources = self._copy_sources(source_metadata)
@@ -74,7 +75,8 @@ class FlashcardService:
                 raise ValueError("INVALID_FLASHCARD_SCHEMA")
             validated = {
                 "front_text": front.strip(), "back_text": back.strip(),
-                "topic": topic.strip(), "difficulty": difficulty,
+                "topic": trusted_topic or topic.strip(),
+                "difficulty": trusted_difficulty or difficulty,
             }
             if sources is not None:
                 validated["source_metadata"] = deepcopy(sources)
@@ -84,7 +86,9 @@ class FlashcardService:
         return {"flashcards": validated_cards}
 
     async def _generate(
-        self, prompt: str, system_prompt: str, count: int, sources: Any, **kwargs: Any
+        self, prompt: str, system_prompt: str, count: int, sources: Any,
+        trusted_topic: Optional[str] = None, trusted_difficulty: Optional[str] = None,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         try:
             result = await self.orchestrator.generate(
@@ -94,7 +98,9 @@ class FlashcardService:
             raise ValueError("FLASHCARD_GENERATION_FAILED") from None
         if result.status != "success":
             raise ValueError("FLASHCARD_GENERATION_FAILED")
-        return self.validate_and_parse_flashcards(result.content, count, sources)
+        return self.validate_and_parse_flashcards(
+            result.content, count, sources, trusted_topic, trusted_difficulty,
+        )
 
     @staticmethod
     def _output_instruction(count: int) -> str:
@@ -123,7 +129,9 @@ class FlashcardService:
             "topic": topic.strip(), "count": count, "difficulty": difficulty,
             "trusted_retrieved_context": retrieved_context,
         }, ensure_ascii=False)
-        return await self._generate(prompt, system_prompt, count, sources, **kwargs)
+        return await self._generate(
+            prompt, system_prompt, count, sources, topic.strip(), difficulty, **kwargs,
+        )
 
     async def generate_flashcards(
         self, prompt_text: str, source_metadata: Any = None, **kwargs: Any

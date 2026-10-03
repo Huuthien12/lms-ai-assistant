@@ -125,7 +125,7 @@ async def test_valid_message_only_contract_and_prompt(orch):
         "Do not change recommended_actions or add/remove actions",
         "Do not state or invent a deadline",
         "Do not mention or invent unavailable courses/topics",
-        'Return strict JSON with only "message"',
+        'Return strict JSON with only "message": "..."',
     ):
         assert phrase in instructions
 

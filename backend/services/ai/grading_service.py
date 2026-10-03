@@ -6,7 +6,7 @@ class GradingService:
 
     IDs must be non-blank strings and are compared exactly, without normalization.
     Missing answers and explicit None selections are unanswered and incorrect.
-    Answer keys in results are intended for post-submission use only.
+    Answer keys remain in the trusted quiz input and are never returned.
     """
 
     @staticmethod
@@ -73,7 +73,6 @@ class GradingService:
                 "question_id": question_id,
                 "correct": selected_id == correct_id,
                 "selected_option_id": selected_id,
-                "correct_option_id": correct_id,
             })
         correct_count = sum(result["correct"] for result in results)
         total_questions = len(results)

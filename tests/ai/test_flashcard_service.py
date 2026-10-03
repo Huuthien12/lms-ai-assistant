@@ -132,6 +132,16 @@ async def test_grounded_generation_prompt_and_exact_count(mock_orchestrator):
 
 
 @pytest.mark.asyncio
+async def test_grounded_generation_uses_trusted_topic_and_difficulty(mock_orchestrator):
+    data = json.loads(mock_orchestrator.generate.return_value.content)
+    data["flashcards"][0].update(topic="Model topic", difficulty="hard")
+    mock_orchestrator.generate.return_value.content = json.dumps(data)
+    result = await FlashcardService(mock_orchestrator).generate_grounded_flashcards(**grounded_input())
+    assert result["flashcards"][0]["topic"] == "Programming"
+    assert result["flashcards"][0]["difficulty"] == "easy"
+
+
+@pytest.mark.asyncio
 async def test_count_mismatch_and_upper_bound(mock_orchestrator):
     service = FlashcardService(mock_orchestrator)
     with pytest.raises(ValueError, match="^INVALID_FLASHCARD_SCHEMA$"):
@@ -205,7 +215,7 @@ async def test_front_back_aliases(mock_orchestrator):
         {"front": " Front ", "back": " Back ", "topic": " Topic ", "difficulty": "mixed"}]})
     result = await FlashcardService(mock_orchestrator).generate_grounded_flashcards(**grounded_input())
     assert result == {"flashcards": [{"front_text": "Front", "back_text": "Back",
-                                      "topic": "Topic", "difficulty": "mixed"}]}
+                                      "topic": "Programming", "difficulty": "easy"}]}
 
 
 @pytest.mark.asyncio

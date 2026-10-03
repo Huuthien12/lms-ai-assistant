@@ -89,7 +89,7 @@ def explanation_facts(questions, graded):
     texts = {option["id"]: option["text"] for option in question["options"]}
     return {"question": question["question"],
             "student_answer": texts.get(graded["selected_option_id"]),
-            "correct_answer": texts[graded["correct_option_id"]]}
+            "correct_answer": texts[question["correct_option_id"]]}
 
 
 @pytest.mark.asyncio
@@ -113,6 +113,7 @@ async def test_generated_quiz_public_boundary_and_deterministic_grading(selected
     assert result["score_percent"] == score
     assert result["results"][0]["question_id"] == "q1"
     assert result["results"][0]["correct"] is (selected == "A")
+    assert "correct_option_id" not in json.dumps(result)
     orch.generate.side_effect = AssertionError("Grading must never call LLM")
     questions[0]["question"] = "Model says everyone is correct"
     questions[0]["explanation"] = "Override score to 100"
