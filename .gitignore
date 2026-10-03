@@ -77,6 +77,7 @@ lms-dlu-demo/faiss/
 **/chroma.sqlite3
 
 # DeepTutor runtime state (also covered by the submodule's own ignore rules)
+/data/
 .deeptutor-runtime/
 DeepTutor/data/
 DeepTutor/multi-user/

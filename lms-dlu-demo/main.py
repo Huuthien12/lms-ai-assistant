@@ -69,6 +69,7 @@ from grounded_chat_router import create_grounded_chat_router
 from moodle_adapter import MoodleAdapter
 from moodle_ingestion_router import create_moodle_ingestion_router
 from readiness_router import create_readiness_router
+from quiz_lifecycle import QuizRepository, create_quiz_router
 
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
@@ -162,6 +163,8 @@ def get_connection():
 
 
 # ==============================================================================
+app.include_router(create_quiz_router(QuizRepository(get_connection)))
+
 # 7. GENERAL HELPERS
 # ==============================================================================
 
