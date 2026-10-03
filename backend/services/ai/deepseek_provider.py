@@ -7,10 +7,12 @@ from backend.services.ai.provider_base import LLMProvider, LLMResult
 logger = logging.getLogger(__name__)
 
 class DeepSeekProvider(LLMProvider):
+    provider = "deepseek"
+
     def __init__(self, api_key: str, model: str = "deepseek-chat", base_url: str = "https://api.deepseek.com/v1", timeout_seconds: float = 30.0):
-        if not api_key:
+        if not isinstance(api_key, str) or not api_key.strip():
             raise ValueError("API key không được để trống cho DeepSeekProvider.")
-        self.api_key = api_key
+        self.api_key = api_key.strip()
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
