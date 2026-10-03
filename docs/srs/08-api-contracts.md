@@ -12,13 +12,17 @@ Response lỗi:
 ```
 Không trả stack trace/secret cho client.
 
-## 2. Chat
-### POST `/chat`
+## 2. Grounded demo chat
+`POST /chat` is retired. The Streamlit demo uses the finalized path:
+
+`POST /lms/chat` -> `POST /chat/grounded` -> DeepTutor retrieval -> grounded AI provider.
+
+### POST `/lms/chat`
 ```json
 {
-  "student_id":"SV001",
-  "course_id":"INT1234",
-  "message":"Deadlock là gì?"
+  "question":"Python la gi?",
+  "course_id":"INT1339",
+  "kb_name":"int1339-python"
 }
 ```
 Response:
@@ -26,12 +30,12 @@ Response:
 {
   "status":"success",
   "answer":"...",
-  "course_id":"INT1234",
-  "kb_name":"lms-int1234",
+  "course_id":"INT1339",
+  "kb_name":"int1339-python",
   "sources":[],
   "ai":{
-    "provider":"deepseek",
-    "model":"...",
+    "provider":"ollama",
+    "model":"qwen2.5:3b",
     "fallback_used":false
   }
 }
@@ -81,11 +85,11 @@ Server lấy student từ auth trong bản hoàn thiện; prototype có thể tr
   ]
 }
 ```
-Response:
+Response exposes only grading facts; answer keys are never returned:
 ```json
 {
   "attempt_id":"...",
-  "status":"graded",
+  "status":"SUBMITTED",
   "score_percent":80,
   "correct_count":8,
   "total_questions":10,
@@ -93,28 +97,23 @@ Response:
     {
       "question_id":"Q1",
       "correct":false,
-      "selected_option_id":"A",
-      "correct_option_id":"B",
-      "explanation_status":"ready"
+      "selected_option_id":"A"
     }
   ]
 }
 ```
 
 ## 6. Wrong-answer explanation
-### GET `/quiz-attempts/{attempt_id}/review`
-Chỉ owner/student được xem attempt của mình.
+### GET `/quiz-attempts/{attempt_id}/review?student_id=...`
+Only the submitted attempt owner may view it. If no grounded context was persisted, the response explicitly reports `"explanation_status":"unavailable"`; it never fabricates an explanation.
 ```json
 {
-  "score_percent":80,
-  "weak_topics":["Deadlock"],
-  "questions":[
+  "attempt_id":"...",
+  "results":[
     {
       "question_id":"Q1",
       "correct":false,
-      "explanation":"...",
-      "key_concept":"...",
-      "sources":[]
+      "explanation_status":"unavailable"
     }
   ]
 }
