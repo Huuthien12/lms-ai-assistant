@@ -70,6 +70,7 @@ from moodle_adapter import MoodleAdapter
 from moodle_ingestion_router import create_moodle_ingestion_router
 from readiness_router import create_readiness_router
 from quiz_lifecycle import QuizRepository, create_quiz_router
+from learning_evidence import LearningEvidenceRepository, create_learning_router
 
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
@@ -163,7 +164,9 @@ def get_connection():
 
 
 # ==============================================================================
-app.include_router(create_quiz_router(QuizRepository(get_connection)))
+LEARNING_EVIDENCE = LearningEvidenceRepository(get_connection)
+app.include_router(create_quiz_router(QuizRepository(get_connection, LEARNING_EVIDENCE)))
+app.include_router(create_learning_router(LEARNING_EVIDENCE))
 
 # 7. GENERAL HELPERS
 # ==============================================================================
