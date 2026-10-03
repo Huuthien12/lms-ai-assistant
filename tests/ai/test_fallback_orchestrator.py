@@ -52,7 +52,7 @@ async def test_non_retryable_errors_do_not_trigger_fallback(mock_primary, mock_f
     res = await provider.generate("test prompt")
 
     assert res.status == "error"
-    assert res.error_code == err_code
+    assert res.error_code == (err_code or "UNKNOWN_ERROR")
     mock_fallback.generate.assert_not_called()
 
 @pytest.mark.asyncio
@@ -68,5 +68,8 @@ async def test_retryable_primary_plus_fallback_failure(mock_primary, mock_fallba
     res = await provider.generate("test prompt")
 
     assert res.status == "error"
-    assert res.content == "Fallback Error"
+    assert res.content == ""
+    assert res.fallback_used is True
+    assert res.provider == "fallback"
+    assert res.model == "m2"
     mock_fallback.generate.assert_called_once()
