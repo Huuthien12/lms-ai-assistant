@@ -46,14 +46,18 @@ async def test_normal_response_preserves_result_and_request_metadata(mock_orches
 
 
 @pytest.mark.asyncio
-async def test_response_preserves_real_source_metadata(mock_orchestrator):
+async def test_response_allows_only_safe_public_source_citations(mock_orchestrator):
     item = RetrievedContextItem(
         text="Source content.",
         source_id="doc_123",
         title="LMS document",
-        url="https://lms.example.test/doc",
         score=0.95,
-        metadata={"page": 3},
+        metadata={
+            "page": 3,
+            "source": "D:\\runtime\\document.pdf",
+            "path": "/tmp/document.pdf",
+            "token": "secret",
+        },
     )
     request = GroundedChatRequest(query="Test?", contexts=[item], course_id="course_99", kb_name="kb_test")
 
@@ -62,10 +66,12 @@ async def test_response_preserves_real_source_metadata(mock_orchestrator):
     assert response.sources == [{
         "source_id": "doc_123",
         "title": "LMS document",
-        "url": "https://lms.example.test/doc",
         "score": 0.95,
-        "metadata": {"page": 3},
+        "page": 3,
     }]
+    assert "runtime" not in str(response.sources)
+    assert "tmp/document" not in str(response.sources)
+    assert "secret" not in str(response.sources)
 
 
 @pytest.mark.asyncio
@@ -75,7 +81,7 @@ async def test_response_does_not_fabricate_missing_source_fields(mock_orchestrat
     response = await GroundedChatService(mock_orchestrator).chat(request)
 
     assert response.sources == [{}]
-    assert not {"source_id", "title", "url"} & response.sources[0].keys()
+    assert not {"source_id", "title", "score", "page"} & response.sources[0].keys()
 
 
 @pytest.mark.asyncio

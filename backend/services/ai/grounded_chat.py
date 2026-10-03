@@ -76,17 +76,17 @@ class GroundedChatService:
                 source_info += f" [URL: {item.url}]"
 
             context_blocks.append(f"{source_info}\nNội dung: {item.text}")
-            sources_meta.append({
+            source = {
                 key: value
                 for key, value in {
                     "source_id": item.source_id,
                     "title": item.title,
-                    "url": item.url,
                     "score": item.score,
-                    "metadata": item.metadata,
+                    "page": item.metadata.get("page"),
                 }.items()
-                if value is not None and value != {}
-            })
+                if value is not None
+            }
+            sources_meta.append(source)
 
         combined_context = "\n\n".join(context_blocks)
 

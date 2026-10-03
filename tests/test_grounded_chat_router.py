@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.services.ai.grounded_chat import GroundedChatResponse, GroundedChatService
+from backend.services.ai.provider_base import LLMResult
 from deeptutor_integration.errors import DeepTutorError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lms-dlu-demo"))
@@ -48,6 +49,29 @@ def test_maps_verified_deeptutor_sources_without_fabricating_fields():
     assert contexts[0].url is None
     assert contexts[0].score == 0.0325
     assert contexts[0].metadata == {"source": "D:/kb/chapter.pdf", "page": "4"}
+
+
+def test_public_endpoint_omits_internal_source_metadata():
+    deeptutor = FakeDeepTutor({"sources": [{
+        "content": "Retrieved excerpt", "chunk_id": "chunk-1", "title": "chapter.pdf",
+        "source": "D:/runtime/chapter.pdf", "page": 4, "score": 0.5,
+    }]})
+    orchestrator = MagicMock()
+    orchestrator.generate = AsyncMock(return_value=LLMResult(
+        status="success", provider="ollama", model="qwen2.5:3b", content="Grounded answer.",
+        latency_ms=1.0, fallback_used=False,
+    ))
+
+    response = client(deeptutor, GroundedChatService(orchestrator)).post(
+        "/chat/grounded", json={"question": "Question", "course_id": "INT1339"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["answer"] == "Grounded answer."
+    assert response.json()["sources"] == [{
+        "source_id": "chunk-1", "title": "chapter.pdf", "page": 4, "score": 0.5,
+    }]
+    assert "runtime" not in response.text.lower()
 
 
 def test_endpoint_preserves_contract_and_never_uses_generated_answer_as_context():
