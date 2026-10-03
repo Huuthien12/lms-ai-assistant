@@ -11,8 +11,30 @@ class ChatRequest(BaseModel):
     kb_name: str | None = None
 
 
+class MoodleIngestionRequest(BaseModel):
+    course_id_moodle: int = Field(gt=0)
+    resource_id: int = Field(gt=0)
+    kb_name: str | None = Field(default=None, min_length=1, max_length=120)
+
+
 def get_client() -> DeepTutorAPIClient:
     return create_deeptutor_client()
+
+
+@router.get("/lms/ready")
+def lms_readiness(client: DeepTutorAPIClient = Depends(get_client)):
+    try:
+        return client.check_readiness()
+    except Exception as exc:
+        raise HTTPException(503, detail={"code": "deeptutor_unavailable", "message": "DeepTutor is unavailable."}) from exc
+
+
+@router.post("/lms/resources/ingest")
+def lms_ingest_resource(request: MoodleIngestionRequest, client: DeepTutorAPIClient = Depends(get_client)):
+    try:
+        return client.ingest_resource(request.course_id_moodle, request.resource_id, request.kb_name)
+    except Exception as exc:
+        raise HTTPException(502, detail={"code": "deeptutor_unavailable", "message": "DeepTutor is unavailable."}) from exc
 
 @router.post("/lms/chat")
 def lms_student_chat(request: ChatRequest, client: DeepTutorAPIClient = Depends(get_client)):
