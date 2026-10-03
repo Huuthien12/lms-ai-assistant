@@ -109,8 +109,10 @@ class LearningEvidenceRepository:
                 cursor.execute("SET XACT_ABORT ON; SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;")
                 card = cursor.execute("SELECT course_id, topic FROM dbo.Flashcards WITH (UPDLOCK, HOLDLOCK) WHERE flashcard_id=?", flashcard_id).fetchone()
                 if card is None: raise ValueError("flashcard_not_found")
-                existing = cursor.execute("SELECT review_id FROM dbo.FlashcardReviews WHERE review_id=?", request.review_id).fetchone()
+                existing = cursor.execute("SELECT student_id, flashcard_id, rating FROM dbo.FlashcardReviews WHERE review_id=?", request.review_id).fetchone()
                 if existing is not None:
+                    if tuple(existing) != (request.student_id, flashcard_id, request.rating):
+                        raise ValueError("idempotency_conflict")
                     conn.commit(); return {"review_id": request.review_id, "status": "RECORDED"}
                 now = _now()
                 cursor.execute("INSERT INTO dbo.FlashcardReviews (review_id, student_id, flashcard_id, rating, reviewed_at) VALUES (?, ?, ?, ?, ?)", request.review_id, request.student_id, flashcard_id, request.rating, now)
@@ -143,7 +145,7 @@ class LearningEvidenceRepository:
 def create_learning_router(repository: LearningEvidenceRepository) -> APIRouter:
     router = APIRouter(tags=["learning"])
     def fail(exc: ValueError) -> None:
-        status = {"flashcard_not_found": 404, "mastery_not_found": 404, "persistence_failure": 503}.get(str(exc), 422)
+        status = {"flashcard_not_found": 404, "mastery_not_found": 404, "idempotency_conflict": 409, "persistence_failure": 503}.get(str(exc), 422)
         raise HTTPException(status, detail={"code": str(exc), "message": "Learning request could not be completed."})
     @router.on_event("startup")
     def initialize() -> None: repository.ensure_schema()

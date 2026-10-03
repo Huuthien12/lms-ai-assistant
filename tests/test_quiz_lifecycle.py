@@ -223,8 +223,8 @@ class EvidenceCursor:
             row = s["cards"].get(values[0]); self.result = Row(row) if row else None
         elif sql.startswith("INSERT INTO dbo.Flashcards"):
             s["cards"][values[0]] = (values[1], values[2])
-        elif sql.startswith("SELECT review_id FROM dbo.FlashcardReviews"):
-            self.result = Row((values[0],)) if values[0] in s["reviews"] else None
+        elif sql.startswith("SELECT student_id, flashcard_id, rating FROM dbo.FlashcardReviews"):
+            review = s["reviews"].get(values[0]); self.result = Row((review[0], review[1], review[2])) if review else None
         elif sql.startswith("INSERT INTO dbo.FlashcardReviews"):
             if s.get("fail_review"): raise RuntimeError("review failure")
             s["reviews"][values[0]] = values[1:]
@@ -262,6 +262,10 @@ def test_flashcard_registry_review_idempotency_and_server_scope():
     assert state["events"] == [{"student_id": "student-1", "course_id": "course-1", "topic": "topic-1", "type": "flashcard", "correct": None, "rating": "GOOD"}]
     assert repo.review("card-1", FlashcardReviewRequest(student_id="student-1", rating="GOOD", review_id="review-1"))["status"] == "RECORDED"
     assert len(state["reviews"]) == len(state["events"]) == 1
+    with pytest.raises(ValueError, match="idempotency_conflict"):
+        repo.review("card-1", FlashcardReviewRequest(student_id="student-2", rating="GOOD", review_id="review-1"))
+    with pytest.raises(ValueError, match="idempotency_conflict"):
+        repo.review("card-1", FlashcardReviewRequest(student_id="student-1", rating="EASY", review_id="review-1"))
 
 
 def test_unknown_card_and_event_failure_roll_back_review_path():
