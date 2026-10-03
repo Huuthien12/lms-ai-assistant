@@ -16,6 +16,7 @@ from quiz_lifecycle import (  # noqa: E402
 from backend.services.ai.grading_service import GradingService  # noqa: E402
 from backend.services.ai.quiz_service import QuizService  # noqa: E402
 from learning_evidence import FlashcardRegistration, FlashcardReviewRequest, LearningEvidenceRepository  # noqa: E402
+from learning_workflow import LearningWorkflowRepository, create_workflow_router  # noqa: E402
 
 
 QUESTIONS = [{
@@ -282,3 +283,36 @@ def test_unknown_card_and_event_failure_roll_back_review_path():
 def test_review_request_forbids_client_mastery_and_scope_fields():
     with pytest.raises(Exception):
         FlashcardReviewRequest(student_id="student", rating="GOOD", review_id="review", course_id="forged")
+
+
+class WorkflowConnection:
+    def __init__(self, state): self.state = state
+    def __enter__(self): return self
+    def __exit__(self, *_): return False
+    def cursor(self): return WorkflowCursor(self.state)
+
+
+class WorkflowCursor:
+    def __init__(self, state): self.state, self.result = state, None
+    def execute(self, sql, *values):
+        if sql.startswith("SELECT quiz_id, student_id FROM dbo.QuizAttempts"):
+            row = self.state.get("attempt") if values[0] == "attempt-1" else None
+            self.result = Row(row) if row else None
+        elif sql.startswith("SELECT questions_json"):
+            self.result = Row(("[]",))
+        elif sql.startswith("SELECT question_id, selected_option_id, correct"):
+            self.result = [Row(row) for row in self.state["answers"]]
+        return self
+    def fetchone(self): return self.result
+    def fetchall(self): return self.result or []
+
+
+def test_review_uses_submitted_owner_state_and_is_safely_degraded():
+    state = {"attempt": ("quiz-1", "student-1"), "answers": [("q1", "b", False), ("q2", "a", True)]}
+    repo = LearningWorkflowRepository(lambda: WorkflowConnection(state), object())
+    review = repo.review("attempt-1", "student-1")
+    assert review == {"attempt_id": "attempt-1", "results": [{"question_id": "q1", "correct": False, "explanation_status": "unavailable"}]}
+    with pytest.raises(ValueError, match="attempt_not_owned"):
+        repo.review("attempt-1", "student-2")
+    with pytest.raises(ValueError, match="attempt_not_found"):
+        repo.review("missing", "student-1")
