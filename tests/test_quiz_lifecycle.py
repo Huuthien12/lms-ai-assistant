@@ -295,7 +295,7 @@ class WorkflowConnection:
 class WorkflowCursor:
     def __init__(self, state): self.state, self.result = state, None
     def execute(self, sql, *values):
-        if sql.startswith("SELECT quiz_id, student_id FROM dbo.QuizAttempts"):
+        if sql.startswith("SELECT quiz_id, student_id, status FROM dbo.QuizAttempts"):
             row = self.state.get("attempt") if values[0] == "attempt-1" else None
             self.result = Row(row) if row else None
         elif sql.startswith("SELECT questions_json"):
@@ -308,7 +308,7 @@ class WorkflowCursor:
 
 
 def test_review_uses_submitted_owner_state_and_is_safely_degraded():
-    state = {"attempt": ("quiz-1", "student-1"), "answers": [("q1", "b", False), ("q2", "a", True)]}
+    state = {"attempt": ("quiz-1", "student-1", "SUBMITTED"), "answers": [("q1", "b", False), ("q2", "a", True)]}
     repo = LearningWorkflowRepository(lambda: WorkflowConnection(state), object())
     review = repo.review("attempt-1", "student-1")
     assert review == {"attempt_id": "attempt-1", "results": [{"question_id": "q1", "correct": False, "explanation_status": "unavailable"}]}
@@ -316,3 +316,6 @@ def test_review_uses_submitted_owner_state_and_is_safely_degraded():
         repo.review("attempt-1", "student-2")
     with pytest.raises(ValueError, match="attempt_not_found"):
         repo.review("missing", "student-1")
+    state["attempt"] = ("quiz-1", "student-1", "IN_PROGRESS")
+    with pytest.raises(ValueError, match="attempt_not_submitted"):
+        repo.review("attempt-1", "student-1")

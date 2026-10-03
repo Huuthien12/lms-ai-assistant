@@ -18,12 +18,14 @@ class LearningWorkflowRepository:
         with self.connect() as conn:
             cursor = conn.cursor()
             attempt = cursor.execute(
-                "SELECT quiz_id, student_id FROM dbo.QuizAttempts WHERE attempt_id=? AND status='SUBMITTED'", attempt_id
+                "SELECT quiz_id, student_id, status FROM dbo.QuizAttempts WHERE attempt_id=?", attempt_id
             ).fetchone()
             if attempt is None:
                 raise ValueError("attempt_not_found")
             if attempt[1] != student_id:
                 raise ValueError("attempt_not_owned")
+            if attempt[2] != "SUBMITTED":
+                raise ValueError("attempt_not_submitted")
             row = cursor.execute("SELECT questions_json FROM dbo.QuizDefinitions WHERE quiz_id=?", attempt[0]).fetchone()
             if row is None:
                 raise ValueError("quiz_not_found")
@@ -44,7 +46,8 @@ def create_workflow_router(repository: LearningWorkflowRepository, recommendatio
     def fail(exc: ValueError) -> None:
         code = str(exc)
         status = {"attempt_not_found": 404, "quiz_not_found": 404,
-                  "attempt_not_owned": 403, "mastery_not_found": 404}.get(code, 422)
+                  "attempt_not_owned": 403, "attempt_not_submitted": 409,
+                  "mastery_not_found": 404}.get(code, 422)
         raise HTTPException(status, detail={"code": code, "message": "Learning workflow request could not be completed."})
 
     @router.get("/quiz-attempts/{attempt_id}/review")
