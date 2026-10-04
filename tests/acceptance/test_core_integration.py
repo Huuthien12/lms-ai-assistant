@@ -32,7 +32,7 @@ class FakeDeepTutorAdapter:
     def get_knowledge_base(self, _kb_id):
         return {"name": "int1339-python", "status": "ready", "statistics": {"rag_initialized": True}}
 
-    def add_document(self, _kb_id, document_path):
+    def add_document(self, _kb_id, document_path, metadata=None):
         self.ingested_bytes = Path(document_path).read_bytes()
         return {"action": "add"}
 

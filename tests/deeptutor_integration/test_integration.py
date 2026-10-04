@@ -30,7 +30,7 @@ class FakeAdapter:
     def get_knowledge_base(self, kb_id): return self.info
     def create_knowledge_base(self, kb_id, document_path):
         self.created.append((kb_id, document_path)); self.info = READY
-    def add_document(self, kb_id, document_path): self.added.append((kb_id, document_path))
+    def add_document(self, kb_id, document_path, metadata=None): self.added.append((kb_id, document_path))
     def search(self, kb_id, question): return {"answer": "grounded", "sources": []}
 
 
