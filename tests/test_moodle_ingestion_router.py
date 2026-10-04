@@ -64,6 +64,7 @@ def test_ingests_normalized_markdown_without_secret_response_data():
     assert document.filename.endswith(".md")
     assert document.content == "# chapter.pdf"
     assert document.metadata["original_filename"] == "chapter.pdf"
+    assert document.metadata["original_sha256"] == sha256(b"%PDF-exact-bytes").hexdigest()
     assert response.json()["status"] == "indexed"
     response_text = response.text.lower()
     assert "token" not in response_text

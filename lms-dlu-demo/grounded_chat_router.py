@@ -36,17 +36,22 @@ def retrieved_contexts(result: Mapping[str, Any]) -> list[RetrievedContextItem]:
         content = source.get("content")
         if not isinstance(content, str) or not content.strip():
             continue
+        source_metadata = source.get("metadata")
+        provenance = source_metadata if isinstance(source_metadata, Mapping) else {}
         metadata = {
             key: source[key]
-            for key in ("source", "page")
+            for key in ("page", "slide", "section")
             if key in source and source[key] not in (None, "")
         }
+        original_filename = source.get("original_filename") or provenance.get("original_filename")
         score = source.get("score")
         contexts.append(
             RetrievedContextItem(
                 text=content,
                 source_id=source.get("chunk_id") if isinstance(source.get("chunk_id"), str) else None,
-                title=source.get("title") if isinstance(source.get("title"), str) else None,
+                title=original_filename if isinstance(original_filename, str) and original_filename else (
+                    source.get("title") if isinstance(source.get("title"), str) else None
+                ),
                 score=float(score) if isinstance(score, (int, float)) and not isinstance(score, bool) else None,
                 metadata=metadata,
             )

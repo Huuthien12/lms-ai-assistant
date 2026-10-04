@@ -37,8 +37,12 @@ def create_moodle_ingestion_router(
             source=document.source,
             metadata={
                 **document.metadata,
+                "course_id": document.course_id,
+                "document_id": document.document_id,
+                "source": document.source,
                 "original_filename": document.original_filename,
                 "original_mime_type": document.original_mime_type,
+                "original_sha256": document.sha256,
                 "source_sha256": document.sha256,
                 "normalizer_version": document.normalizer_version,
             },
