@@ -35,6 +35,11 @@ class MoodleIngestionLedger:
     def lifecycle(self, document: NormalizedDocument) -> str | None:
         return self._records().get(self._key(document), {}).get("lifecycle")
 
+    def original_filename(self, course_id: str, document_id: str, sha256: str) -> str | None:
+        record = self._records().get(f"{course_id}:{document_id}:{sha256}", {})
+        value = record.get("original_filename")
+        return value if isinstance(value, str) else None
+
     def record(self, document: NormalizedDocument) -> None:
         try:
             records = self._records()
