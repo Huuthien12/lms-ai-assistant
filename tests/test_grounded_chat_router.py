@@ -48,7 +48,22 @@ def test_maps_verified_deeptutor_sources_without_fabricating_fields():
     assert contexts[0].title == "chapter.pdf"
     assert contexts[0].url is None
     assert contexts[0].score == 0.0325
-    assert contexts[0].metadata == {"source": "D:/kb/chapter.pdf", "page": "4"}
+    assert contexts[0].metadata == {"page": "4"}
+
+
+def test_normalized_moodle_citations_prefer_original_filename_and_legacy_falls_back():
+    formats = ("lecture.pdf", "lecture.docx", "lecture.pptx", "lecture.md")
+    for original_filename in formats:
+        contexts = retrieved_contexts({"sources": [{
+            "content": "Retrieved excerpt", "chunk_id": "chunk-1", "title": "1-hash.md",
+            "metadata": {
+                "original_filename": original_filename, "source_sha256": "a" * 64,
+                "token": "private", "download_url": "https://private", "path": "D:/private",
+            },
+        }]})
+        assert contexts[0].title == original_filename
+        assert "hash.md" not in contexts[0].title
+    assert retrieved_contexts({"sources": [{"content": "legacy", "title": "legacy.pdf"}]} )[0].title == "legacy.pdf"
 
 
 def test_public_endpoint_omits_internal_source_metadata():

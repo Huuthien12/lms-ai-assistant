@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict
+from pathlib import Path
+import re
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -15,6 +17,7 @@ from backend.services.ai.grounded_chat import (
 from deeptutor_integration.contracts import QueryInput
 from deeptutor_integration.errors import DeepTutorError
 from deeptutor_integration.service import DeepTutorService
+from deeptutor_integration.moodle_ingestion_ledger import MoodleIngestionLedger
 
 
 class GroundedChatInput(BaseModel):
@@ -23,7 +26,7 @@ class GroundedChatInput(BaseModel):
     kb_name: str | None = Field(default=None, min_length=1, max_length=120)
 
 
-def retrieved_contexts(result: Mapping[str, Any]) -> list[RetrievedContextItem]:
+def retrieved_contexts(result: Mapping[str, Any], ledger: MoodleIngestionLedger | None = None, course_id: str = "") -> list[RetrievedContextItem]:
     """Map the verified DeepTutor CLI source shape without using generated output."""
     sources = result.get("sources")
     if not isinstance(sources, list):
@@ -36,17 +39,26 @@ def retrieved_contexts(result: Mapping[str, Any]) -> list[RetrievedContextItem]:
         content = source.get("content")
         if not isinstance(content, str) or not content.strip():
             continue
+        source_metadata = source.get("metadata")
+        provenance = source_metadata if isinstance(source_metadata, Mapping) else {}
         metadata = {
             key: source[key]
-            for key in ("source", "page")
+            for key in ("page", "slide", "section")
             if key in source and source[key] not in (None, "")
         }
+        original_filename = source.get("original_filename") or provenance.get("original_filename")
+        if not original_filename and ledger and isinstance(source.get("title"), str):
+            match = re.fullmatch(r"(\d+)-([0-9a-f]{64})\.md", source["title"])
+            if match:
+                original_filename = ledger.original_filename(course_id, match.group(1), match.group(2))
         score = source.get("score")
         contexts.append(
             RetrievedContextItem(
                 text=content,
                 source_id=source.get("chunk_id") if isinstance(source.get("chunk_id"), str) else None,
-                title=source.get("title") if isinstance(source.get("title"), str) else None,
+                title=original_filename if isinstance(original_filename, str) and original_filename else (
+                    source.get("title") if isinstance(source.get("title"), str) else None
+                ),
                 score=float(score) if isinstance(score, (int, float)) and not isinstance(score, bool) else None,
                 metadata=metadata,
             )
@@ -59,6 +71,8 @@ def create_grounded_chat_router(
     grounded_chat_service: GroundedChatService | None,
 ) -> APIRouter:
     router = APIRouter(tags=["grounded-chat"])
+    config = getattr(deeptutor_service, "config", None)
+    ledger = MoodleIngestionLedger(config.runtime_dir) if config else None
 
     @router.post("/chat/grounded")
     async def grounded_chat(request: GroundedChatInput) -> dict[str, Any]:
@@ -79,7 +93,7 @@ def create_grounded_chat_router(
             response = await grounded_chat_service.chat(
                 GroundedChatRequest(
                     query=request.question,
-                    contexts=retrieved_contexts(query_result["result"]),
+                    contexts=retrieved_contexts(query_result["result"], ledger, request.course_id),
                     course_id=query_result["course_id"],
                     kb_name=query_result["kb_id"],
                 )

@@ -16,7 +16,7 @@ class DeepTutorAdapter(Protocol):
     def list_knowledge_bases(self) -> list[dict[str, Any]]: ...
     def get_knowledge_base(self, kb_id: str) -> dict[str, Any] | None: ...
     def create_knowledge_base(self, kb_id: str, document_path: Path) -> None: ...
-    def add_document(self, kb_id: str, document_path: Path) -> None: ...
+    def add_document(self, kb_id: str, document_path: Path, metadata: dict[str, str] | None = None) -> None: ...
     def search(self, kb_id: str, question: str) -> dict[str, Any]: ...
 
 
@@ -103,8 +103,11 @@ class CliDeepTutorAdapter:
     def create_knowledge_base(self, kb_id: str, document_path: Path) -> None:
         self._run(["kb", "create", kb_id, "--doc", str(document_path)])
 
-    def add_document(self, kb_id: str, document_path: Path) -> None:
-        self._run(["kb", "add", kb_id, "--doc", str(document_path)])
+    def add_document(self, kb_id: str, document_path: Path, metadata: dict[str, str] | None = None) -> None:
+        args = ["kb", "add", kb_id, "--doc", str(document_path)]
+        if metadata:
+            args += ["--metadata-json", json.dumps(metadata, sort_keys=True)]
+        self._run(args)
 
     def search(self, kb_id: str, question: str) -> dict[str, Any]:
         result = self._run(["kb", "search", kb_id, question, "--format", "json"])

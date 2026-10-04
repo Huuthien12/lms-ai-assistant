@@ -45,7 +45,7 @@ class RealDeepTutorClient:
         return data
 
     def chat(self, question: str, course_id: str, kb_name: str | None = None) -> dict[str, Any]:
-        response = httpx.post(f"{self.base_url}/chat/grounded", json={"question": question, "course_id": course_id, "kb_name": kb_name}, timeout=30)
+        response = httpx.post(f"{self.base_url}/chat/grounded", json={"question": question, "course_id": course_id, "kb_name": kb_name}, timeout=120)
         response.raise_for_status()
         return response.json()
 

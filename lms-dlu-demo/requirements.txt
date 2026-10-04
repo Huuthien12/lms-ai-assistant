@@ -1,5 +1,6 @@
 fastapi
 httpx
+markitdown[pdf,docx,pptx]>=0.0.1a2
 pydantic
 pyodbc
 python-dotenv

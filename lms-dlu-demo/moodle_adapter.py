@@ -2,6 +2,8 @@ import os
 import requests
 from dotenv import load_dotenv
 
+from deeptutor_integration.contracts import SourceDocument
+
 load_dotenv()
 
 class MoodleAdapter:
@@ -39,7 +41,7 @@ class MoodleAdapter:
 
         return data
 
-    def get_normalized_document(self, course_id_moodle, resource_id):
+    def get_source_document(self, course_id_moodle, resource_id) -> SourceDocument:
         """
         Lấy thông tin file, download và chuẩn hóa metadata.
         course_id_moodle: ID của khóa học trên hệ thống
@@ -79,39 +81,44 @@ class MoodleAdapter:
         if not target_file:
             raise RuntimeError(f"Không tìm thấy tài liệu (resource_id={resource_id}) hoặc file đính kèm bị rỗng/thiếu")
 
-        # 4. Lấy link và tải byte của file PDF
+        # 4. Lấy link và tải byte gốc của file
         fileurl = target_file.get("fileurl")
         if not fileurl:
             raise RuntimeError("Không tìm thấy đường dẫn tải file (fileurl) trong dữ liệu Moodle")
 
         try:
-            pdf_response = requests.get(fileurl, params={"token": self.token}, timeout=30)
-            pdf_response.raise_for_status()
+            file_response = requests.get(fileurl, params={"token": self.token}, timeout=30)
+            file_response.raise_for_status()
         except requests.RequestException as e:
-            raise RuntimeError("Lỗi HTTP khi tải file PDF từ Moodle.") from e
+            raise RuntimeError("Lỗi HTTP khi tải file từ Moodle.") from e
 
-        pdf_bytes = pdf_response.content
+        content = file_response.content
 
-        # Ngăn chặn trường hợp file rỗng hoặc bị chuyển hướng sang trang lỗi HTML
-        content_type = pdf_response.headers.get("Content-Type", "").lower()
+        # Ngăn chặn trường hợp file rỗng hoặc bị chuyển hướng sang trang lỗi HTML.
+        content_type = file_response.headers.get("Content-Type", "").lower()
+        filename = target_file.get("filename", "document")
         if (
-            not pdf_bytes
-            or not pdf_bytes.startswith(b"%PDF-")
+            not content
             or content_type.startswith("text/html")
+            or content.lstrip().lower().startswith((b"<html", b"<!doctype html"))
         ):
-            raise RuntimeError("Dữ liệu tải về không hợp lệ (không phải file PDF, có thể do lỗi xác thực).")
+            raise RuntimeError("Dữ liệu tải về không hợp lệ.")
+        if filename.lower().endswith(".pdf") and not content.startswith(b"%PDF-"):
+            raise RuntimeError("Dữ liệu PDF tải về không hợp lệ.")
 
-        # 5. Chuẩn hóa metadata (Loại bỏ token và các URL tải mạng, KHÔNG gán path)
-        normalized_doc = {
-            "course_id": str(course_info.get("shortname", course_id_moodle)),
-            "document_id": str(resource_id),
-            "filename": target_file.get("filename", "document.pdf"),
-            "mime_type": target_file.get("mimetype", "application/pdf"),
-            "source": "moodle",
-            "metadata": {
+        return SourceDocument(
+            course_id=str(course_info.get("shortname", course_id_moodle)),
+            document_id=str(resource_id),
+            filename=filename,
+            mime_type=target_file.get("mimetype") or content_type.split(";", 1)[0] or "application/octet-stream",
+            source="moodle",
+            metadata={
                 "course_name": course_info.get("fullname", ""),
                 "moodle_file_size": target_file.get("filesize", 0)
-            }
-        }
+            },
+            content=content,
+        )
 
-        return normalized_doc, pdf_bytes
+    def get_normalized_document(self, course_id_moodle, resource_id) -> SourceDocument:
+        """Backward-compatible alias; callers now receive original source bytes."""
+        return self.get_source_document(course_id_moodle, resource_id)
