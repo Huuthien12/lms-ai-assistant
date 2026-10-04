@@ -35,8 +35,7 @@ class MoodleAdapter:
             raise RuntimeError("Định dạng dữ liệu trả về từ Moodle không hợp lệ (không phải JSON).")
 
         if isinstance(data, dict) and ("exception" in data or "errorcode" in data):
-            err_msg = data.get("message", data.get("errorcode", "Lỗi Moodle không xác định"))
-            raise RuntimeError(f"Moodle Web Service error: {err_msg}")
+            raise RuntimeError("Moodle Web Service error.")
 
         return data
 
@@ -50,7 +49,12 @@ class MoodleAdapter:
         courses = self._call_ws("core_course_get_courses", **{"options[ids][0]": course_id_moodle})
         if not courses or not isinstance(courses, list):
             raise RuntimeError("Không tìm thấy khóa học hoặc dữ liệu khóa học không hợp lệ")
-        course_info = courses[0]
+        course_info = next(
+            (course for course in courses if str(course.get("id")) == str(course_id_moodle)),
+            None,
+        )
+        if not isinstance(course_info, dict):
+            raise RuntimeError("Không tìm thấy khóa học hoặc dữ liệu khóa học không hợp lệ")
 
         # 2. Lấy danh sách tài nguyên của khóa học
         resources_resp = self._call_ws("mod_resource_get_resources_by_courses", **{"courseids[0]": course_id_moodle})
@@ -59,10 +63,17 @@ class MoodleAdapter:
         # 3. Tìm tài liệu tương ứng và kiểm tra an toàn contentfiles
         target_file = None
         for res in resources:
-            if res.get("id") == resource_id:
+            if str(res.get("id")) == str(resource_id):
                 contentfiles = res.get("contentfiles", [])
-                if contentfiles and isinstance(contentfiles, list) and len(contentfiles) > 0:
-                    target_file = contentfiles[0]
+                if isinstance(contentfiles, list):
+                    target_file = next(
+                        (
+                            item for item in contentfiles
+                            if isinstance(item, dict)
+                            and item.get("fileurl")
+                        ),
+                        None,
+                    )
                 break
 
         if not target_file:
@@ -73,9 +84,8 @@ class MoodleAdapter:
         if not fileurl:
             raise RuntimeError("Không tìm thấy đường dẫn tải file (fileurl) trong dữ liệu Moodle")
 
-        download_url = f"{fileurl}?token={self.token}"
         try:
-            pdf_response = requests.get(download_url, timeout=30)
+            pdf_response = requests.get(fileurl, params={"token": self.token}, timeout=30)
             pdf_response.raise_for_status()
         except requests.RequestException as e:
             raise RuntimeError("Lỗi HTTP khi tải file PDF từ Moodle.") from e
@@ -83,8 +93,12 @@ class MoodleAdapter:
         pdf_bytes = pdf_response.content
 
         # Ngăn chặn trường hợp file rỗng hoặc bị chuyển hướng sang trang lỗi HTML
-        content_type = pdf_response.headers.get("Content-Type", "")
-        if not pdf_bytes or content_type.startswith("text/html"):
+        content_type = pdf_response.headers.get("Content-Type", "").lower()
+        if (
+            not pdf_bytes
+            or not pdf_bytes.startswith(b"%PDF-")
+            or content_type.startswith("text/html")
+        ):
             raise RuntimeError("Dữ liệu tải về không hợp lệ (không phải file PDF, có thể do lỗi xác thực).")
 
         # 5. Chuẩn hóa metadata (Loại bỏ token và các URL tải mạng, KHÔNG gán path)

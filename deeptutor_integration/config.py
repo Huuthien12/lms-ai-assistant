@@ -13,16 +13,32 @@ class DeepTutorConfig:
     runtime_dir: Path
     command_timeout_seconds: int = 300
 
+    @property
+    def python_executable(self) -> Path:
+        """Return the interpreter for the repository-managed DeepTutor venv."""
+        return self.deeptutor_dir / ".venv" / (
+            "Scripts/python.exe" if os.name == "nt" else "bin/python"
+        )
+
+    @property
+    def command_prefix(self) -> tuple[str, ...]:
+        """Prefer the venv module CLI while retaining an executable fallback."""
+        if self.python_executable.is_file():
+            return (str(self.python_executable), "-m", "deeptutor_cli.main")
+        if self.executable.is_file():
+            return (str(self.executable),)
+        return ()
+
     @classmethod
     def from_env(cls, repository_root: Path | None = None) -> "DeepTutorConfig":
         root = (repository_root or Path(__file__).resolve().parents[1]).resolve()
-        deeptutor_dir = Path(os.getenv("DEEPTUTOR_DIR", root / "DeepTutor")).resolve()
+        deeptutor_dir = Path(os.getenv("DEEPTUTOR_DIR") or root / "DeepTutor").resolve()
         default_executable = deeptutor_dir / ".venv" / (
             "Scripts/deeptutor.exe" if os.name == "nt" else "bin/deeptutor"
         )
-        executable = Path(os.getenv("DEEPTUTOR_EXE", default_executable)).resolve()
+        executable = Path(os.getenv("DEEPTUTOR_EXE") or default_executable).resolve()
         runtime_dir = Path(
-            os.getenv("DEEPTUTOR_RUNTIME_DIR", root / ".deeptutor-runtime")
+            os.getenv("DEEPTUTOR_RUNTIME_DIR") or root / ".deeptutor-runtime"
         ).resolve()
         timeout = int(os.getenv("DEEPTUTOR_TIMEOUT_SECONDS", "300"))
         if timeout <= 0:
