@@ -92,7 +92,7 @@ class DeepTutorService:
             self.adapter.create_knowledge_base(kb_id, path)
         elif self._ready(info):
             action = "add"
-            self.adapter.add_document(kb_id, path)
+            self.adapter.add_document(kb_id, path, {key: value for key, value in document.metadata.items() if key in {"original_filename", "original_mime_type", "original_sha256", "course_id", "document_id", "source", "normalizer_version"} and isinstance(value, str)})
         else:
             raise DeepTutorError("kb_not_ready", "Knowledge base is not ready.", status_code=409)
         final_info = self.adapter.get_knowledge_base(kb_id)
