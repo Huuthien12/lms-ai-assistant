@@ -12,6 +12,7 @@ from backend.services.ai.grounded_chat import GroundedChatService
 from backend.services.ai.ollama_provider import OllamaProvider
 from backend.services.ai.orchestrator import AIOrchestrator
 from deeptutor_integration.config import DeepTutorConfig
+from deeptutor_integration.contracts import NormalizedDocument, SourceDocument
 from deeptutor_integration.service import DeepTutorService
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lms-dlu-demo"))
@@ -54,23 +55,29 @@ def deeptutor_service(tmp_path):
     return DeepTutorService(config, adapter), adapter
 
 
-def test_moodle_ingestion_uses_the_mapped_kb_and_exact_pdf_bytes(tmp_path):
+def test_moodle_ingestion_uses_the_mapped_kb_and_normalized_markdown(tmp_path):
     service, adapter = deeptutor_service(tmp_path)
-    normalized_document = {
-        "course_id": "INT1339", "document_id": "1", "filename": "Chuong 1.pdf",
-        "mime_type": "application/pdf", "source": "moodle", "metadata": {"course_name": "Python"},
-    }
+    source = SourceDocument(
+        course_id="INT1339", document_id="1", filename="Chuong 1.pdf", mime_type="application/pdf",
+        source="moodle", metadata={"course_name": "Python"}, content=b"%PDF-exact-bytes",
+    )
+    normalizer = MagicMock()
+    normalizer.normalize.return_value = NormalizedDocument(
+        course_id="INT1339", document_id="1", original_filename="Chuong 1.pdf",
+        original_mime_type="application/pdf", source="moodle", metadata={"course_name": "Python"},
+        sha256="a" * 64, markdown="# Normalized PDF", normalizer_version="test-v1",
+    )
     moodle = MagicMock()
-    moodle.get_normalized_document.return_value = normalized_document, b"%PDF-exact-bytes"
+    moodle.get_source_document.return_value = source
     app = FastAPI()
-    app.include_router(create_moodle_ingestion_router(moodle, service))
+    app.include_router(create_moodle_ingestion_router(moodle, service, normalizer=normalizer))
 
     response = TestClient(app).post("/moodle/resources/ingest", json={"course_id_moodle": 9, "resource_id": 1})
 
     assert response.status_code == 200
     assert response.json()["kb_id"] == "int1339-python"
-    assert adapter.ingested_bytes == b"%PDF-exact-bytes"
-    moodle.get_normalized_document.assert_called_once_with(9, 1)
+    assert adapter.ingested_bytes == b"# Normalized PDF"
+    moodle.get_source_document.assert_called_once_with(9, 1)
     assert "moodle-documents" not in response.text.lower()
     assert "token" not in response.text.lower()
 

@@ -40,23 +40,22 @@ class TestMoodleAdapter(unittest.TestCase):
 
         mock_get.side_effect = [course_resp, resource_resp, pdf_resp]
 
-        doc, pdf_bytes = self.adapter.get_normalized_document(course_id_moodle=9, resource_id=1)
+        source = self.adapter.get_source_document(course_id_moodle=9, resource_id=1)
 
         # 1 & 2. Kiểm tra normalization thành công và fields chuẩn
-        self.assertEqual(doc["course_id"], "INT1339")
-        self.assertEqual(doc["document_id"], "1")
-        self.assertEqual(doc["filename"], "Chuong1.pdf")
-        self.assertEqual(doc["mime_type"], "application/pdf")
-        self.assertEqual(doc["source"], "moodle")
+        self.assertEqual(source.course_id, "INT1339")
+        self.assertEqual(source.document_id, "1")
+        self.assertEqual(source.filename, "Chuong1.pdf")
+        self.assertEqual(source.mime_type, "application/pdf")
+        self.assertEqual(source.source, "moodle")
 
         # 3. PDF bytes được trả riêng
-        self.assertEqual(pdf_bytes, b"%PDF-1.4 FAKE PDF CONTENT")
+        self.assertEqual(source.content, b"%PDF-1.4 FAKE PDF CONTENT")
         self.assertEqual(mock_get.call_args_list[2].kwargs["params"], {"token": self.fake_token})
         self.assertEqual(mock_get.call_args_list[2].kwargs["timeout"], 30)
 
         # 4 & 5. Không lộ token và không lưu URL/path
-        self.assertNotIn("path", doc)
-        doc_str = str(doc)
+        doc_str = str(source.model_dump())
         self.assertNotIn(self.fake_token, doc_str)
         self.assertNotIn("token=", doc_str)
         self.assertNotIn("https://fake-moodle", doc_str)
@@ -73,7 +72,7 @@ class TestMoodleAdapter(unittest.TestCase):
         mock_get.side_effect = [course_resp, resource_resp]
 
         with self.assertRaises(RuntimeError) as context:
-            self.adapter.get_normalized_document(9, 999)
+            self.adapter.get_source_document(9, 999)
         self.assertIn("Không tìm thấy tài liệu", str(context.exception))
 
     @patch("moodle_adapter.requests.get")
@@ -90,7 +89,7 @@ class TestMoodleAdapter(unittest.TestCase):
         mock_get.side_effect = [course_resp, resource_resp]
 
         with self.assertRaises(RuntimeError) as context:
-            self.adapter.get_normalized_document(9, 1)
+            self.adapter.get_source_document(9, 1)
         self.assertIn("rỗng/thiếu", str(context.exception))
 
     @patch("moodle_adapter.requests.get")
@@ -105,7 +104,7 @@ class TestMoodleAdapter(unittest.TestCase):
         mock_get.return_value = err_resp
 
         with self.assertRaises(RuntimeError) as context:
-            self.adapter.get_normalized_document(9, 1)
+            self.adapter.get_source_document(9, 1)
         self.assertIn("Moodle Web Service error", str(context.exception))
 
     @patch("moodle_adapter.requests.get")
@@ -127,7 +126,7 @@ class TestMoodleAdapter(unittest.TestCase):
 
         with self.assertRaises(RuntimeError) as context:
             self.adapter.get_normalized_document(9, 1)
-        self.assertIn("Lỗi HTTP khi tải file PDF", str(context.exception))
+        self.assertIn("Lỗi HTTP khi tải file", str(context.exception))
 
     @patch("moodle_adapter.requests.get")
     def test_rejects_non_pdf_download(self, mock_get):
@@ -142,8 +141,26 @@ class TestMoodleAdapter(unittest.TestCase):
         downloaded.headers = {"Content-Type": "text/html"}
         mock_get.side_effect = [course_resp, resource_resp, downloaded]
 
-        with self.assertRaisesRegex(RuntimeError, "không phải file PDF"):
-            self.adapter.get_normalized_document(9, 1)
+        with self.assertRaisesRegex(RuntimeError, "không hợp lệ"):
+            self.adapter.get_source_document(9, 1)
+
+    @patch("moodle_adapter.requests.get")
+    def test_preserves_non_pdf_original_bytes(self, mock_get):
+        for filename, mime_type, content in (
+            ("chapter.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", b"docx"),
+            ("chapter.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", b"pptx"),
+            ("chapter.md", "text/markdown", b"# markdown"),
+        ):
+            course = MagicMock(); course.json.return_value = [{"id": 9, "shortname": "INT1339"}]
+            resources = MagicMock(); resources.json.return_value = {"resources": [{"id": 1, "contentfiles": [{
+                "filename": filename, "mimetype": mime_type, "fileurl": "https://private"
+            }]}]}
+            downloaded = MagicMock(); downloaded.content = content; downloaded.headers = {"Content-Type": mime_type}
+            mock_get.side_effect = [course, resources, downloaded]
+            retrieved = self.adapter.get_source_document(9, 1)
+            self.assertEqual((retrieved.filename, retrieved.mime_type, retrieved.content), (filename, mime_type, content))
+            mock_get.reset_mock()
+
 
 if __name__ == "__main__":
     unittest.main()
