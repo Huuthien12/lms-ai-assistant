@@ -720,9 +720,7 @@ class SaveChatRequest(BaseModel):
 @app.get("/")
 def root():
 
-    deeptutor_available = os.path.exists(
-        DEEPTUTOR_EXE
-    )
+    deeptutor_available = bool(DEEPTUTOR_CONFIG.command_prefix)
 
     return {
         "status": "ok",

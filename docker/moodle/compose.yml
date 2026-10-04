@@ -36,6 +36,12 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:${MOODLE_HTTP_PORT:-8088}:80"
+    healthcheck:
+      test: ["CMD", "php", "-r", "$$socket = @fsockopen(\"127.0.0.1\", 80); if (!$$socket) exit(1); fwrite($$socket, \"GET / HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n\"); $$status = fgets($$socket); exit($$status && preg_match(\"/^HTTP\\/1\\.[01] [23]/\", $$status) ? 0 : 1);"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 120s
     volumes:
       - deeptutor_moodle_app:/var/www/html
       - deeptutor_moodle_data:/var/www/moodledata
