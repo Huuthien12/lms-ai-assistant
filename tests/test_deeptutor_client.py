@@ -54,6 +54,7 @@ def test_real_client_maps_authoritative_grounded_chat_contract():
 
     assert post.call_args.args[0] == "http://api.test/chat/grounded"
     assert post.call_args.kwargs["json"] == {"question": "Question", "course_id": "INT1339", "kb_name": "int1339-python"}
+    assert post.call_args.kwargs["timeout"] == 120
 
 
 def test_real_client_maps_readiness_contract():
