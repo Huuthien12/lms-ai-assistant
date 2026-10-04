@@ -24,8 +24,18 @@ class DeepTutorAdapter(Protocol):
 class CliDeepTutorAdapter:
     config: DeepTutorConfig
 
+    def _command(self, args: list[str]) -> list[str]:
+        """Prefer the venv interpreter so Windows launcher policy cannot block the CLI."""
+        if self.config.command_prefix:
+            return [*self.config.command_prefix, *args]
+        raise DeepTutorError(
+            "runtime_unavailable",
+            "DeepTutor runtime is not available.",
+            status_code=503,
+        )
+
     def _run(self, args: list[str], timeout: int | None = None) -> subprocess.CompletedProcess[str]:
-        if not self.config.deeptutor_dir.is_dir() or not self.config.executable.is_file():
+        if not self.config.deeptutor_dir.is_dir():
             raise DeepTutorError(
                 "runtime_unavailable",
                 "DeepTutor runtime is not available.",
@@ -35,7 +45,7 @@ class CliDeepTutorAdapter:
         env.update({"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", "TERM": "dumb", "NO_COLOR": "1"})
         try:
             result = subprocess.run(
-                [str(self.config.executable), *args],
+                self._command(args),
                 cwd=self.config.deeptutor_dir,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
@@ -70,7 +80,9 @@ class CliDeepTutorAdapter:
             raise DeepTutorError(code, "DeepTutor returned an invalid response.", status_code=502) from exc
 
     def health(self) -> dict[str, Any]:
-        available = self.config.deeptutor_dir.is_dir() and self.config.executable.is_file()
+        available = self.config.deeptutor_dir.is_dir() and (
+            self.config.python_executable.is_file() or self.config.executable.is_file()
+        )
         return {"available": available, "status": "available" if available else "unavailable"}
 
     def list_knowledge_bases(self) -> list[dict[str, Any]]:

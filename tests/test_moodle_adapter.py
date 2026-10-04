@@ -51,6 +51,8 @@ class TestMoodleAdapter(unittest.TestCase):
 
         # 3. PDF bytes được trả riêng
         self.assertEqual(pdf_bytes, b"%PDF-1.4 FAKE PDF CONTENT")
+        self.assertEqual(mock_get.call_args_list[2].kwargs["params"], {"token": self.fake_token})
+        self.assertEqual(mock_get.call_args_list[2].kwargs["timeout"], 30)
 
         # 4 & 5. Không lộ token và không lưu URL/path
         self.assertNotIn("path", doc)
@@ -126,6 +128,22 @@ class TestMoodleAdapter(unittest.TestCase):
         with self.assertRaises(RuntimeError) as context:
             self.adapter.get_normalized_document(9, 1)
         self.assertIn("Lỗi HTTP khi tải file PDF", str(context.exception))
+
+    @patch("moodle_adapter.requests.get")
+    def test_rejects_non_pdf_download(self, mock_get):
+        course_resp = MagicMock()
+        course_resp.json.return_value = [{"id": 9, "shortname": "INT1339"}]
+        resource_resp = MagicMock()
+        resource_resp.json.return_value = {"resources": [{"id": 1, "contentfiles": [{
+            "filename": "chapter.pdf", "mimetype": "application/pdf", "fileurl": "https://fake.com/file"
+        }]}]}
+        downloaded = MagicMock()
+        downloaded.content = b"<html>login</html>"
+        downloaded.headers = {"Content-Type": "text/html"}
+        mock_get.side_effect = [course_resp, resource_resp, downloaded]
+
+        with self.assertRaisesRegex(RuntimeError, "không phải file PDF"):
+            self.adapter.get_normalized_document(9, 1)
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,60 @@
+name: deeptutor-moodle
+
+services:
+  db:
+    image: mariadb:10.11
+    container_name: deeptutor-moodle-db
+    restart: unless-stopped
+    env_file:
+      - ../../.moodle.env
+    environment:
+      MARIADB_DATABASE: ${MOODLE_DB_NAME}
+      MARIADB_USER: ${MOODLE_DB_USER}
+      MARIADB_PASSWORD: ${MOODLE_DB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${MOODLE_DB_ROOT_PASSWORD}
+    volumes:
+      - deeptutor_moodle_db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks: [moodle]
+
+  moodle:
+    build:
+      context: .
+      args:
+        MOODLE_BRANCH: ${MOODLE_BRANCH:-MOODLE_405_STABLE}
+    container_name: deeptutor-moodle
+    restart: unless-stopped
+    env_file:
+      - ../../.moodle.env
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${MOODLE_HTTP_PORT:-8088}:80"
+    healthcheck:
+      test: ["CMD", "php", "-r", "$$socket = @fsockopen(\"127.0.0.1\", 80); if (!$$socket) exit(1); fwrite($$socket, \"GET / HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n\"); $$status = fgets($$socket); exit($$status && preg_match(\"/^HTTP\\/1\\.[01] [23]/\", $$status) ? 0 : 1);"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 120s
+    volumes:
+      - deeptutor_moodle_app:/var/www/html
+      - deeptutor_moodle_data:/var/www/moodledata
+    networks: [moodle]
+
+volumes:
+  deeptutor_moodle_app:
+    name: deeptutor-moodle-app
+  deeptutor_moodle_db:
+    name: deeptutor-moodle-db-data
+  deeptutor_moodle_data:
+    name: deeptutor-moodle-data
+
+networks:
+  moodle:
+    name: deeptutor-moodle-network

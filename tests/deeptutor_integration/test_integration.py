@@ -46,11 +46,43 @@ class DeepTutorIntegrationTests(unittest.TestCase):
             self.assertEqual(config.runtime_dir, Path(tmp).resolve() / ".deeptutor-runtime")
             self.assertEqual(config.command_timeout_seconds, 12)
 
+    def test_config_empty_path_overrides_use_defaults(self):
+        with TemporaryDirectory() as tmp, patch.dict(
+            os.environ,
+            {"DEEPTUTOR_DIR": "", "DEEPTUTOR_EXE": "", "DEEPTUTOR_RUNTIME_DIR": ""},
+            clear=True,
+        ):
+            config = DeepTutorConfig.from_env(Path(tmp))
+            self.assertEqual(config.deeptutor_dir, Path(tmp).resolve() / "DeepTutor")
+            self.assertEqual(config.executable, Path(tmp).resolve() / "DeepTutor" / ".venv" / "Scripts" / "deeptutor.exe")
+            self.assertEqual(config.runtime_dir, Path(tmp).resolve() / ".deeptutor-runtime")
+
     def test_health_unavailable_without_process(self):
         with TemporaryDirectory() as tmp:
             base = self.make_service(Path(tmp))
             service = self.make_service(Path(tmp), CliDeepTutorAdapter(base.config))
             self.assertEqual(service.health()["status"], "unavailable")
+
+    def test_adapter_prefers_venv_python_module_cli(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            deeptutor_dir = root / "DeepTutor"
+            python_executable = deeptutor_dir / ".venv" / "Scripts" / "python.exe"
+            python_executable.parent.mkdir(parents=True)
+            python_executable.touch()
+            executable = deeptutor_dir / ".venv" / "Scripts" / "deeptutor.exe"
+            executable.touch()
+            config = DeepTutorConfig(root, deeptutor_dir, executable, root / "runtime", 30)
+            adapter = CliDeepTutorAdapter(config)
+            with patch("deeptutor_integration.adapter.subprocess.run") as run:
+                run.return_value.returncode = 0
+                run.return_value.stdout = "[]"
+                run.return_value.stderr = ""
+                self.assertEqual(adapter.list_knowledge_bases(), [])
+            self.assertEqual(
+                run.call_args.args[0],
+                [str(python_executable), "-m", "deeptutor_cli.main", "kb", "list", "--format", "json"],
+            )
 
     def test_document_validation(self):
         with self.assertRaises(ValidationError):

@@ -209,9 +209,7 @@ def safe_filename(filename: str):
 
 def check_deeptutor_executable():
 
-    if not os.path.exists(
-        DEEPTUTOR_EXE
-    ):
+    if not DEEPTUTOR_CONFIG.command_prefix:
 
         raise RuntimeError(
             "Kh?ng t?m th?y DeepTutor executable t?i: "
@@ -233,10 +231,7 @@ def run_deeptutor_command(
 
     check_deeptutor_executable()
 
-    command = [
-        DEEPTUTOR_EXE,
-        *args
-    ]
+    command = [*DEEPTUTOR_CONFIG.command_prefix, *args]
 
     # L?y environment hi?n t?i d? DeepTutor v?n d?c du?c
     # c?c API key/config dang c?.
@@ -725,9 +720,7 @@ class SaveChatRequest(BaseModel):
 @app.get("/")
 def root():
 
-    deeptutor_available = os.path.exists(
-        DEEPTUTOR_EXE
-    )
+    deeptutor_available = bool(DEEPTUTOR_CONFIG.command_prefix)
 
     return {
         "status": "ok",
