@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from .contracts import NormalizedDocument, SourceDocument
 from .errors import DeepTutorError
@@ -24,9 +25,6 @@ DOCUMENT_FORMATS = {
         ".pptx",
         frozenset({"application/vnd.openxmlformats-officedocument.presentationml.presentation"}),
     ),
-    ".ppt": DocumentFormat(
-        ".ppt", frozenset({"application/vnd.ms-powerpoint", "application/mspowerpoint"}),
-    ),
     ".md": DocumentFormat(".md", frozenset({"text/markdown", "text/x-markdown", "text/plain"})),
 }
 
@@ -47,25 +45,34 @@ def validate_document_format(source: SourceDocument) -> DocumentFormat:
     return document_format
 
 
+def _convert_markitdown(path: Path) -> str:
+    try:
+        from markitdown import MarkItDown
+    except ImportError as exc:
+        raise DeepTutorError(
+            "normalizer_unavailable", "Document conversion is not installed.", status_code=503
+        ) from exc
+    return str(getattr(MarkItDown().convert(str(path)), "text_content", "") or "")
+
+
 class DocumentNormalizer:
-    """Normalize supported LMS source documents without touching the filesystem."""
+    """Normalize supported LMS source documents into Markdown."""
 
     def normalize(self, source: SourceDocument) -> NormalizedDocument:
         document_format = validate_document_format(source)
         digest = source_sha256(source.content)
-        if document_format.extension != ".md":
-            raise DeepTutorError(
-                "normalizer_unavailable",
-                "A normalizer for this document type is not available yet.",
-                status_code=501,
-            )
-        try:
-            markdown = source.content.decode("utf-8-sig")
-        except UnicodeDecodeError as exc:
-            raise DeepTutorError("invalid_document", "Markdown content must be valid UTF-8.", status_code=422) from exc
+        if document_format.extension == ".md":
+            try:
+                markdown = source.content.decode("utf-8-sig")
+            except UnicodeDecodeError as exc:
+                raise DeepTutorError("invalid_document", "Markdown content must be valid UTF-8.", status_code=422) from exc
+            version = "markdown-v1"
+        else:
+            markdown = self._normalize_binary(source, document_format.extension)
+            version = f"markitdown-{document_format.extension[1:]}-v1"
         markdown = markdown.replace("\r\n", "\n").replace("\r", "\n")
         if not markdown.strip():
-            raise DeepTutorError("invalid_document", "Markdown content must not be blank.", status_code=422)
+            raise DeepTutorError("invalid_document", "Normalized Markdown must not be blank.", status_code=422)
         return NormalizedDocument(
             document_id=source.document_id,
             course_id=source.course_id,
@@ -75,5 +82,23 @@ class DocumentNormalizer:
             metadata=source.metadata,
             sha256=digest,
             markdown=markdown,
-            normalizer_version="markdown-v1",
+            normalizer_version=version,
         )
+
+    @staticmethod
+    def _normalize_binary(source: SourceDocument, extension: str) -> str:
+        path: Path | None = None
+        try:
+            with NamedTemporaryFile(suffix=extension, delete=False) as temporary:
+                temporary.write(source.content)
+                path = Path(temporary.name)
+            return _convert_markitdown(path)
+        except DeepTutorError:
+            raise
+        except Exception as exc:
+            raise DeepTutorError(
+                "normalization_failed", "Document conversion failed.", status_code=422
+            ) from exc
+        finally:
+            if path is not None:
+                path.unlink(missing_ok=True)
