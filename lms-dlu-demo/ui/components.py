@@ -98,9 +98,22 @@ def render_document_row(st, material: dict[str, Any]) -> None:
     st.markdown(f"<div class='course-card'><div class='course-code'>{suffix}</div><div class='course-name'>{name}</div><div class='course-meta'>{escape(uploaded) if uploaded else 'Thông tin tài liệu'}</div></div>", unsafe_allow_html=True)
 
 
+def public_citation_titles(sources: list[dict[str, Any]]) -> list[str]:
+    """Return distinct public titles in their retrieval order."""
+    seen: set[str] = set()
+    titles: list[str] = []
+    for item in sources:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        if title and title not in seen:
+            seen.add(title)
+            titles.append(title)
+    return titles
+
+
 def render_citations(st, sources: list[dict[str, Any]]) -> None:
-    safe_titles = [str(item.get("title") or "").strip() for item in sources if isinstance(item, dict)]
-    safe_titles = [title for title in safe_titles if title]
+    safe_titles = public_citation_titles(sources)
     if not safe_titles:
         return
     st.markdown("<h3 class='lms-section-title'>Nguồn tham khảo</h3>", unsafe_allow_html=True)
