@@ -6,6 +6,9 @@ import requests
 import streamlit as st
 from dotenv import load_dotenv
 
+from ui.components import render_course_card, render_placeholder, render_topbar, role_label
+from ui.theme import inject_theme
+
 
 # ==============================================================================
 # 1. CẤU HÌNH BACKEND
@@ -33,9 +36,8 @@ st.set_page_config(
     page_title="Hệ thống quản lý học tập Trường Đại học Đà Lạt LMS-DLU",
     page_icon="🎓",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
-
 
 # ==============================================================================
 # 3. CSS - GIỮ GIAO DIỆN FRONTEND CŨ
@@ -226,6 +228,8 @@ header {
 
 </style>
 """, unsafe_allow_html=True)
+
+inject_theme(st)
 
 
 # ==============================================================================
@@ -595,6 +599,31 @@ else:
     # HEADER
     # ==========================================================================
 
+    role = st.session_state.user_role
+    navigation = (
+        [("Tổng quan", "dashboard"), ("Môn học", "courses"), ("Tài liệu", "documents"), ("Đồng bộ DeepTutor", "sync")]
+        if role == "teacher"
+        else [("Tổng quan", "dashboard"), ("Môn học", "courses"), ("Tài liệu", "documents"), ("AI Tutor", "ai_tutor")]
+    )
+    with st.sidebar:
+        st.markdown("### LMS DeepTutor")
+        st.caption(f"{role_label(role)} · {st.session_state.user_name}")
+        for label, target in navigation:
+            if st.button(label, key=f"nav_{target}", use_container_width=True):
+                st.session_state.view_page = target
+                st.rerun()
+
+    page_titles = {
+        "dashboard": "Tổng quan", "courses": "Môn học", "course_detail": "Chi tiết môn học",
+        "documents": "Tài liệu", "ai_tutor": "AI Tutor", "sync": "Đồng bộ DeepTutor",
+    }
+    render_topbar(
+        st,
+        title=page_titles.get(st.session_state.view_page, "LMS DeepTutor"),
+        user_name=st.session_state.user_name,
+        role=role,
+    )
+
     c_h1, c_h2 = st.columns(
         [3, 1]
     )
@@ -691,7 +720,7 @@ else:
     # 8. DASHBOARD
     # ==========================================================================
 
-    if st.session_state.view_page == "dashboard":
+    if st.session_state.view_page in {"dashboard", "courses"}:
 
         st.markdown(
             '<div class="dlu-breadcrumb">'
@@ -778,10 +807,7 @@ else:
                                 '</div>'
                             )
 
-                            st.markdown(
-                                course_html,
-                                unsafe_allow_html=True
-                            )
+                            render_course_card(st, course)
 
                             if st.button(
                                 f"Vào môn học",
@@ -941,6 +967,33 @@ else:
     # ==========================================================================
     # 9. COURSE DETAIL
     # ==========================================================================
+
+    elif st.session_state.view_page == "documents":
+        render_placeholder(
+            st,
+            "Tài liệu",
+            "Chọn một môn học để xem tài liệu hiện có. Chức năng duyệt tài nguyên Moodle sẽ được bổ sung khi có API phù hợp.",
+        )
+        if st.button("Mở danh sách môn học", type="primary", key="documents_courses"):
+            st.session_state.view_page = "courses"
+            st.rerun()
+
+    elif st.session_state.view_page == "ai_tutor":
+        render_placeholder(
+            st,
+            "AI Tutor",
+            "Chọn một môn học để sử dụng DeepTutor trong đúng ngữ cảnh môn học và xem trích dẫn nguồn gốc.",
+        )
+        if st.button("Chọn môn học", type="primary", key="tutor_courses"):
+            st.session_state.view_page = "courses"
+            st.rerun()
+
+    elif st.session_state.view_page == "sync":
+        render_placeholder(
+            st,
+            "Đồng bộ DeepTutor",
+            "Trạng thái đồng bộ Moodle sẽ được hiển thị tại đây khi giao diện có API duyệt tài nguyên Moodle an toàn.",
+        )
 
     elif st.session_state.view_page == "course_detail":
 
