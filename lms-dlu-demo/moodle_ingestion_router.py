@@ -28,6 +28,29 @@ def create_moodle_ingestion_router(
     normalizer = normalizer or DocumentNormalizer()
     ledger = ledger or MoodleIngestionLedger(deeptutor_service.config.runtime_dir)
 
+    @router.get("/moodle/courses")
+    def list_moodle_courses() -> list[dict[str, Any]]:
+        if moodle_adapter is None:
+            raise HTTPException(status_code=503, detail={"code": "moodle_unavailable", "message": "Moodle is not configured."})
+        try:
+            return moodle_adapter.list_courses()
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail={"code": "moodle_discovery_unavailable", "message": "Unable to retrieve Moodle courses."}) from exc
+
+    @router.get("/moodle/courses/{course_id_moodle}/resources")
+    def list_moodle_resources(course_id_moodle: int) -> list[dict[str, Any]]:
+        if moodle_adapter is None:
+            raise HTTPException(status_code=503, detail={"code": "moodle_unavailable", "message": "Moodle is not configured."})
+        try:
+            course = moodle_adapter.get_course(course_id_moodle)
+            kb_id = deeptutor_service.kb_name(course["shortname"])
+            statuses = {"ACTIVE": "indexed", "SUPERSEDED": "superseded", "DELETED": "deleted"}
+            return [{**resource, "sync_status": statuses.get(ledger.resource_lifecycle(course["shortname"], str(resource["resource_id"])), "not_synced"), "kb_id": kb_id} for resource in moodle_adapter.list_file_resources(course_id_moodle)]
+        except DeepTutorError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.as_dict()) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail={"code": "moodle_discovery_unavailable", "message": "Unable to retrieve Moodle resources."}) from exc
+
     def document_input(document: NormalizedDocument, kb_id: str | None) -> DocumentInput:
         return DocumentInput(
             document_id=document.document_id,

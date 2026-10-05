@@ -1,6 +1,7 @@
 import os
 import requests
 from dotenv import load_dotenv
+from pathlib import Path
 
 from deeptutor_integration.contracts import SourceDocument
 
@@ -40,6 +41,39 @@ class MoodleAdapter:
             raise RuntimeError("Moodle Web Service error.")
 
         return data
+
+    def list_courses(self):
+        courses = self._call_ws("core_course_get_courses")
+        if not isinstance(courses, list):
+            raise RuntimeError("Moodle course data is invalid.")
+        return [
+            {"id": int(course["id"]), "shortname": str(course.get("shortname") or ""),
+             "fullname": str(course.get("fullname") or "")}
+            for course in courses
+            if isinstance(course, dict) and str(course.get("id", "")).isdigit()
+        ]
+
+    def get_course(self, course_id_moodle):
+        courses = self._call_ws("core_course_get_courses", **{"options[ids][0]": course_id_moodle})
+        course = next((item for item in courses if isinstance(item, dict) and str(item.get("id")) == str(course_id_moodle)), None) if isinstance(courses, list) else None
+        if not course:
+            raise RuntimeError("Moodle course was not found.")
+        return {"id": int(course["id"]), "shortname": str(course.get("shortname") or ""), "fullname": str(course.get("fullname") or "")}
+
+    def list_file_resources(self, course_id_moodle):
+        resources_resp = self._call_ws("mod_resource_get_resources_by_courses", **{"courseids[0]": course_id_moodle})
+        resources = resources_resp.get("resources", []) if isinstance(resources_resp, dict) else []
+        output = []
+        for resource in resources:
+            files = resource.get("contentfiles", []) if isinstance(resource, dict) else []
+            file_info = next((item for item in files if isinstance(item, dict) and item.get("filename") and item.get("fileurl")), None)
+            if not file_info or not str(resource.get("id", "")).isdigit():
+                continue
+            extension = Path(str(file_info["filename"])).suffix.lower()
+            output.append({"resource_id": int(resource["id"]), "filename": str(file_info["filename"]),
+                           "mime_type": str(file_info.get("mimetype") or "application/octet-stream"),
+                           "format": extension[1:].upper() if extension in {".pdf", ".docx", ".pptx", ".md"} else "UNSUPPORTED"})
+        return output
 
     def get_source_document(self, course_id_moodle, resource_id) -> SourceDocument:
         """

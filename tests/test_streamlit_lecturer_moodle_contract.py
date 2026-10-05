@@ -1,0 +1,13 @@
+from pathlib import Path
+
+
+SOURCE = (Path(__file__).resolve().parents[1] / "lms-dlu-demo" / "app.py").read_text(encoding="utf-8")
+
+
+def test_lecturer_moodle_sync_uses_discovery_and_existing_ingestion_contract():
+    assert 'api_get("/moodle/courses"' in SOURCE
+    assert '"/moodle/resources/ingest"' in SOURCE
+    assert '"course_id_moodle": st.session_state.selected_moodle_course_id' in SOURCE
+    assert '"resource_id": resource["resource_id"]' in SOURCE
+    assert "Create KB" not in SOURCE
+    assert "generated Markdown" not in SOURCE

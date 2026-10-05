@@ -791,6 +791,29 @@ else:
 
     if st.session_state.view_page in {"dashboard", "courses"}:
 
+        if role == "teacher":
+            st.markdown("#### Môn học Moodle phụ trách")
+            moodle_courses = api_get("/moodle/courses", timeout=15)
+            if not moodle_courses["success"]:
+                st.error("Không thể tải danh sách môn học Moodle.")
+            elif not moodle_courses["data"]:
+                st.info("Chưa có môn học Moodle.")
+            else:
+                for course in moodle_courses["data"]:
+                    shortname = str(course.get("shortname") or "")
+                    fullname = str(course.get("fullname") or shortname)
+                    with st.container(border=True):
+                        st.markdown(f"**{fullname}**")
+                        st.caption(shortname)
+                        if st.button("Mở tài liệu Moodle", key=f"moodle_course_{course.get('id')}", use_container_width=True):
+                            st.session_state.selected_moodle_course_id = int(course["id"])
+                            st.session_state.selected_course_id = shortname
+                            st.session_state.selected_course = f"{fullname} ({shortname})"
+                            st.session_state.view_page = "course_detail"
+                            st.session_state.workspace_tab = "Tài liệu"
+                            st.rerun()
+            st.stop()
+
         st.markdown(
             '<div class="dlu-breadcrumb">'
             'Bảng Điều khiển > Các khoá học của tôi > Thêm...'
@@ -1111,10 +1134,32 @@ else:
                 unsafe_allow_html=True
             )
 
-        materials_result = api_get(
+        if st.session_state.user_role == "teacher" and st.session_state.get("selected_moodle_course_id"):
+            resources_result = api_get(f"/moodle/courses/{st.session_state.selected_moodle_course_id}/resources", timeout=30)
+            if workspace_tab == "Tài liệu" and resources_result["success"]:
+                for resource in resources_result["data"]:
+                    with st.container(border=True):
+                        st.markdown(f"**{resource.get('filename', 'Tài liệu')}**")
+                        st.caption(f"{resource.get('format', 'FILE')} · Moodle")
+                        status = resource.get("sync_status", "not_synced")
+                        st.write("DeepTutor: " + {"indexed": "Đã đồng bộ", "superseded": "Đã thay thế", "deleted": "Đã xóa"}.get(status, "Chưa đồng bộ"))
+                        if status == "indexed":
+                            st.caption(f"KB: {resource.get('kb_id', '')}")
+                        elif resource.get("format") != "UNSUPPORTED" and st.button("Đồng bộ DeepTutor", key=f"sync_{resource.get('resource_id')}"):
+                            result = api_post("/moodle/resources/ingest", json_data={"course_id_moodle": st.session_state.selected_moodle_course_id, "resource_id": resource["resource_id"]}, timeout=180)
+                            if result["success"]:
+                                st.success("Đã đồng bộ DeepTutor.")
+                                st.rerun()
+                            else:
+                                st.error("Đồng bộ DeepTutor thất bại.")
+            elif workspace_tab == "Tài liệu":
+                st.error("Không thể tải tài liệu Moodle.")
+            materials_result = {"success": True, "data": {"materials": []}}
+        else:
+            materials_result = api_get(
             f"/courses/{course_id}/materials",
             timeout=180
-        )
+            )
 
         if materials_result["success"]:
 
@@ -1271,7 +1316,7 @@ else:
         # 10. GIẢNG VIÊN
         # ======================================================================
 
-        if workspace_tab == "Tài liệu" and st.session_state.user_role == "teacher":
+        if workspace_tab == "Tài liệu" and st.session_state.user_role == "teacher" and not st.session_state.get("selected_moodle_course_id"):
 
             st.subheader(
                 "👨‍🏫 Quản lý tài liệu môn học "
