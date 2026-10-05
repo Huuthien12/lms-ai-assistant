@@ -47,11 +47,18 @@ def inject_theme(st) -> None:
         .dlu-black-nav {{ background:{PRIMARY_DARK} !important; border-radius:10px; }}
         .section-green-title {{ color:{PRIMARY_DARK} !important; border-bottom-color:{PRIMARY} !important; }}
         .deeptutor-box {{ background:{PRIMARY_LIGHT} !important; border-left-color:{PRIMARY} !important; }}
-        [data-testid="stSidebar"] {{ background:{SURFACE}; border-right:1px solid #E2E8F0; }}
-        [data-testid="stSidebar"] .stButton button {{ text-align:left; border:0; background:transparent;
-          color:{TEXT_PRIMARY}; border-radius:8px; }}
-        [data-testid="stSidebar"] .stButton button:hover {{ background:{PRIMARY_LIGHT}; color:{PRIMARY_DARK}; }}
-        [data-testid="stSidebar"] .stButton button[kind="primary"] {{ background:{PRIMARY_LIGHT}; color:{PRIMARY_DARK}; border:0; }}
+        [data-testid="stSidebar"] {{ background:{SURFACE}; border-right:1px solid #E2E8F0; min-width:250px !important; width:250px !important; }}
+        [data-testid="stSidebar"] > div:first-child {{ min-width:250px !important; width:250px !important; min-height:100vh; }}
+        [data-testid="stSidebarUserContent"] {{ min-height:100vh; padding:1.2rem .8rem 1rem; }}
+        .sidebar-brand {{ display:flex; align-items:center; gap:.75rem; padding:.35rem .45rem 1.25rem; color:{TEXT_PRIMARY}; }}
+        .sidebar-brand > span {{ width:38px; height:38px; display:grid; place-items:center; border-radius:11px; background:{PRIMARY_LIGHT}; color:{PRIMARY}; font-size:1.35rem; }}
+        .sidebar-brand strong {{ display:block; font-size:1.05rem; }} .sidebar-brand small {{ display:block; margin-top:.1rem; color:{TEXT_MUTED}; font-size:.76rem; }}
+        [data-testid="stSidebar"] .stButton button {{ min-height:48px; padding:.7rem .9rem; text-align:left; border:0; background:transparent;
+          color:{TEXT_PRIMARY}; border-radius:11px; font-weight:600; transition:background 180ms ease,color 180ms ease,transform 180ms ease; cursor:pointer; }}
+        [data-testid="stSidebar"] .stButton button:hover {{ background:#F1F7FF; color:{PRIMARY}; transform:translateX(2px); }}
+        [data-testid="stSidebar"] .stButton button[kind="primary"] {{ background:{PRIMARY_LIGHT}; color:{PRIMARY}; border:0; }}
+        [data-testid="stSidebar"] .stButton button[kind="primary"]:hover {{ background:{PRIMARY_LIGHT}; color:{PRIMARY}; transform:none; }}
+        .sidebar-spacer {{ height:calc(100vh - 440px); min-height:4rem; }}
         .stButton > button[kind="primary"] {{ background:{PRIMARY}; border-color:{PRIMARY}; }}
         .stButton > button[kind="primary"]:hover {{ background:{PRIMARY_DARK}; border-color:{PRIMARY_DARK}; }}
         .student-welcome {{ min-height:190px; display:flex; align-items:center; justify-content:space-between; overflow:hidden;
@@ -65,13 +72,17 @@ def inject_theme(st) -> None:
         .metric-ring {{ width:68px; height:68px; display:grid; place-items:center; border-radius:50%; background:{SURFACE}; font-weight:800; border:6px solid; }}
         .metric-blue {{ border-color:{PRIMARY}; color:{PRIMARY_DARK}; }} .metric-green {{ border-color:{SUCCESS}; color:{SUCCESS}; }} .metric-orange {{ border-color:{WARNING}; color:{WARNING}; }}
         .dashboard-course {{ min-height:180px; background:{SURFACE}; border:1px solid #E2E8F0; border-radius:16px; padding:1rem; box-shadow:0 2px 10px rgba(15,23,42,.045); }}
+        .dashboard-course {{ transition:border-color 200ms ease,box-shadow 200ms ease,transform 200ms ease; cursor:pointer; }}
+        .dashboard-course:hover {{ border-color:#3B82F6; box-shadow:0 8px 24px rgba(21,101,192,.12); transform:translateY(-3px); }}
         .dashboard-course .course-icon {{ width:38px; height:38px; display:grid; place-items:center; border-radius:11px; margin-bottom:.75rem; }}
         .dashboard-course.purple .course-icon {{ background:#F3E8FF; color:#7E22CE; }} .dashboard-course.python .course-icon {{ background:#FEF3C7; color:#B45309; }} .dashboard-course.red .course-icon {{ background:#FEE2E2; color:#DC2626; }}
         .utility-card {{ background:{SURFACE}; border:1px solid #E2E8F0; border-radius:16px; padding:1rem; margin-bottom:1rem; box-shadow:0 2px 10px rgba(15,23,42,.045); }}
         .utility-card h3 {{ margin:0 0 .9rem; color:{TEXT_PRIMARY}; font-size:1rem; }} .utility-card h4 {{ margin:0 0 .8rem; text-align:center; color:{TEXT_MUTED}; font-size:.8rem; }}
         .calendar-grid {{ display:grid; grid-template-columns:repeat(7,1fr); gap:.28rem; text-align:center; }} .calendar-grid span {{ min-height:25px; display:grid; place-items:center; font-size:.75rem; color:{TEXT_MUTED}; }}
         .calendar-days span {{ font-weight:700; font-size:.65rem; }} .calendar-grid .calendar-today {{ color:#fff; background:{PRIMARY}; border-radius:50%; }} .utility-empty {{ color:{TEXT_MUTED}; background:{BACKGROUND}; border-radius:10px; padding:1rem; text-align:center; font-size:.84rem; }}
-        @media (max-width: 850px) {{ .metric-card {{ flex-direction:column; }} .metric-item + .metric-item {{ border-left:0; border-top:1px solid #E2E8F0; }} .student-welcome {{ padding:1.35rem; }} }}
+        .stButton > button[kind="secondary"] {{ background:{SURFACE}; border:1px solid #CBD5E1; color:{TEXT_PRIMARY}; transition:background 180ms ease,border-color 180ms ease,color 180ms ease; }}
+        .stButton > button[kind="secondary"]:hover {{ background:{PRIMARY}; border-color:{PRIMARY}; color:#fff; }}
+        @media (max-width: 850px) {{ [data-testid="stSidebar"], [data-testid="stSidebar"] > div:first-child {{ min-width:auto !important; width:auto !important; }} .metric-card {{ flex-direction:column; }} .metric-item + .metric-item {{ border-left:0; border-top:1px solid #E2E8F0; }} .student-welcome {{ padding:1.35rem; }} }}
         </style>
         """,
         unsafe_allow_html=True,

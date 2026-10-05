@@ -613,8 +613,15 @@ else:
         else [("⌂ Tổng quan", "dashboard"), ("▣ Môn học", "courses"), ("▤ Tài liệu", "documents"), ("✦ AI Tutor", "ai_tutor")]
     )
     with st.sidebar:
-        st.markdown("### LMS DeepTutor")
-        st.caption("Đại học Đà Lạt" if role == "student" else f"{role_label(role)} · {st.session_state.user_name}")
+        if role == "student":
+            st.markdown(
+                "<div class='sidebar-brand'><span>🎓</span><div><strong>LMS DeepTutor</strong>"
+                "<small>Đại học Đà Lạt</small></div></div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown("### LMS DeepTutor")
+            st.caption(f"{role_label(role)} · {st.session_state.user_name}")
         for label, target in navigation:
             if st.button(label, key=f"nav_{target}", use_container_width=True, type="primary" if st.session_state.view_page == target else "secondary"):
                 if target in {"documents", "ai_tutor"} and st.session_state.selected_course_id:
@@ -624,6 +631,7 @@ else:
                     st.session_state.view_page = target
                 st.rerun()
         if role == "student":
+            st.markdown("<div class='sidebar-spacer'></div>", unsafe_allow_html=True)
             st.divider()
             st.button("⚙ Cài đặt", key="student_settings", use_container_width=True, disabled=True)
             if st.button("↪ Đăng xuất", key="student_logout", use_container_width=True):
