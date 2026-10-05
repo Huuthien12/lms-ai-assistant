@@ -631,18 +631,18 @@ else:
                     st.session_state.view_page = target
                 st.rerun()
         if role == "student":
-            st.markdown("<div class='sidebar-spacer'></div>", unsafe_allow_html=True)
-            st.divider()
-            st.button("⚙ Cài đặt", key="student_settings", use_container_width=True, disabled=True)
-            if st.button("↪ Đăng xuất", key="student_logout", use_container_width=True):
-                st.session_state.logged_in = False
-                st.session_state.login_failed = False
-                st.session_state.user_id = ""
-                st.session_state.user_name = ""
-                st.session_state.selected_course = ""
-                st.session_state.selected_course_id = ""
-                st.session_state.chat_messages = []
-                st.rerun()
+            with st.container(key="sidebar_bottom_actions"):
+                st.divider()
+                st.button("⚙ Cài đặt", key="student_settings", use_container_width=True, disabled=True)
+                if st.button("↪ Đăng xuất", key="student_logout", use_container_width=True):
+                    st.session_state.logged_in = False
+                    st.session_state.login_failed = False
+                    st.session_state.user_id = ""
+                    st.session_state.user_name = ""
+                    st.session_state.selected_course = ""
+                    st.session_state.selected_course_id = ""
+                    st.session_state.chat_messages = []
+                    st.rerun()
 
     page_titles = {
         "dashboard": "Tổng quan", "courses": "Môn học", "course_detail": "Chi tiết môn học",

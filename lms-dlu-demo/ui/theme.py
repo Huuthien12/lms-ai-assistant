@@ -47,10 +47,11 @@ def inject_theme(st) -> None:
         .dlu-black-nav {{ background:{PRIMARY_DARK} !important; border-radius:10px; }}
         .section-green-title {{ color:{PRIMARY_DARK} !important; border-bottom-color:{PRIMARY} !important; }}
         .deeptutor-box {{ background:{PRIMARY_LIGHT} !important; border-left-color:{PRIMARY} !important; }}
-        [data-testid="stSidebar"] {{ background:{SURFACE}; border-right:1px solid #E2E8F0; min-width:250px !important; width:250px !important; }}
-        [data-testid="stSidebar"] > div:first-child {{ min-width:250px !important; width:250px !important; min-height:100vh; }}
-        @media (min-width:851px) {{ [data-testid="stSidebar"][aria-expanded="false"] {{ transform:translateX(0) !important; visibility:visible !important; }} [data-testid="stSidebar"][aria-expanded="false"] > div {{ transform:none !important; visibility:visible !important; }} [data-testid="stSidebarCollapsedControl"] {{ display:none !important; }} }}
+        [data-testid="stSidebar"] {{ background:{SURFACE}; border-right:1px solid #E2E8F0; }}
+        @media (min-width:851px) {{ [data-testid="stSidebar"][aria-expanded="true"], [data-testid="stSidebar"][aria-expanded="true"] > div:first-child {{ min-width:250px !important; width:250px !important; }} }}
         [data-testid="stSidebarUserContent"] {{ min-height:100vh; padding:1.2rem .8rem 1rem; }}
+        [data-testid="stSidebarUserContent"] > div:first-child {{ display:flex; flex-direction:column; min-height:calc(100vh - 2.2rem); }}
+        [data-testid="stSidebarUserContent"] .st-key-sidebar_bottom_actions {{ margin-top:auto; }}
         .sidebar-brand {{ display:flex; align-items:center; gap:.75rem; padding:.35rem .45rem 1.25rem; color:{TEXT_PRIMARY}; }}
         .sidebar-brand > span {{ width:38px; height:38px; display:grid; place-items:center; border-radius:11px; background:{PRIMARY_LIGHT}; color:{PRIMARY}; font-size:1.35rem; }}
         .sidebar-brand strong {{ display:block; font-size:1.05rem; }} .sidebar-brand small {{ display:block; margin-top:.1rem; color:{TEXT_MUTED}; font-size:.76rem; }}
@@ -59,7 +60,7 @@ def inject_theme(st) -> None:
         [data-testid="stSidebar"] .stButton button:hover {{ background:#F1F7FF; color:{PRIMARY}; transform:translateX(2px); }}
         [data-testid="stSidebar"] .stButton button[kind="primary"] {{ background:{PRIMARY_LIGHT}; color:{PRIMARY}; border:0; }}
         [data-testid="stSidebar"] .stButton button[kind="primary"]:hover {{ background:{PRIMARY_LIGHT}; color:{PRIMARY}; transform:none; }}
-        .sidebar-spacer {{ height:calc(100vh - 440px); min-height:4rem; }}
+        [data-testid="stSidebar"] .st-key-student_logout button:hover {{ background:#FEF2F2; color:{ERROR}; }}
         .stButton > button[kind="primary"] {{ background:{PRIMARY}; border-color:{PRIMARY}; }}
         .stButton > button[kind="primary"]:hover {{ background:{PRIMARY_DARK}; border-color:{PRIMARY_DARK}; }}
         .student-welcome {{ min-height:190px; display:flex; align-items:center; justify-content:space-between; overflow:hidden;
