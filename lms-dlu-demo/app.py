@@ -7,8 +7,9 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from ui.components import (
-    render_citations, render_course_card, render_document_row, render_placeholder,
-    render_topbar, render_workspace_header, role_label,
+    render_academic_metrics, render_calendar_card, render_citations, render_course_card,
+    render_dashboard_course_card, render_document_row, render_placeholder, render_topbar,
+    render_upcoming_events, render_welcome_banner, render_workspace_header, role_label,
 )
 from ui.theme import inject_theme
 
@@ -609,18 +610,30 @@ else:
     navigation = (
         [("Tổng quan", "dashboard"), ("Môn học", "courses"), ("Tài liệu", "documents"), ("Đồng bộ DeepTutor", "sync")]
         if role == "teacher"
-        else [("Tổng quan", "dashboard"), ("Môn học", "courses"), ("Tài liệu", "documents"), ("AI Tutor", "ai_tutor")]
+        else [("⌂ Tổng quan", "dashboard"), ("▣ Môn học", "courses"), ("▤ Tài liệu", "documents"), ("✦ AI Tutor", "ai_tutor")]
     )
     with st.sidebar:
         st.markdown("### LMS DeepTutor")
-        st.caption(f"{role_label(role)} · {st.session_state.user_name}")
+        st.caption("Đại học Đà Lạt" if role == "student" else f"{role_label(role)} · {st.session_state.user_name}")
         for label, target in navigation:
-            if st.button(label, key=f"nav_{target}", use_container_width=True):
+            if st.button(label, key=f"nav_{target}", use_container_width=True, type="primary" if st.session_state.view_page == target else "secondary"):
                 if target in {"documents", "ai_tutor"} and st.session_state.selected_course_id:
                     st.session_state.workspace_tab = "Tài liệu" if target == "documents" else "AI Tutor"
                     st.session_state.view_page = "course_detail"
                 else:
                     st.session_state.view_page = target
+                st.rerun()
+        if role == "student":
+            st.divider()
+            st.button("⚙ Cài đặt", key="student_settings", use_container_width=True, disabled=True)
+            if st.button("↪ Đăng xuất", key="student_logout", use_container_width=True):
+                st.session_state.logged_in = False
+                st.session_state.login_failed = False
+                st.session_state.user_id = ""
+                st.session_state.user_name = ""
+                st.session_state.selected_course = ""
+                st.session_state.selected_course_id = ""
+                st.session_state.chat_messages = []
                 st.rerun()
 
     page_titles = {
@@ -632,7 +645,45 @@ else:
         title=page_titles.get(st.session_state.view_page, "LMS DeepTutor"),
         user_name=st.session_state.user_name,
         role=role,
+        user_id=st.session_state.user_id,
     )
+
+    if role == "student" and st.session_state.view_page == "dashboard":
+        courses_result = api_get("/courses", timeout=15)
+        courses_data = courses_result["data"].get("courses", []) if courses_result["success"] else []
+        main_column, utility_column = st.columns([2.7, 1], gap="large")
+        with main_column:
+            render_welcome_banner(st, st.session_state.user_name)
+            render_academic_metrics(st)
+            title_column, action_column = st.columns([4, 1])
+            with title_column:
+                st.markdown("<h2 class='lms-section-title'>▣ Khóa học của tôi</h2>", unsafe_allow_html=True)
+            with action_column:
+                if st.button("Xem tất cả →", key="dashboard_all_courses"):
+                    st.session_state.view_page = "courses"
+                    st.rerun()
+            if courses_data:
+                cards = st.columns(3)
+                accents = ["purple", "python", "red"]
+                for index, course in enumerate(courses_data[:3]):
+                    with cards[index]:
+                        render_dashboard_course_card(st, course, accents[index])
+                        course_id = str(course.get("course_id", ""))
+                        if st.button("Vào môn học →", key=f"dashboard_course_{course_id}", use_container_width=True):
+                            st.session_state.selected_course = f"{course.get('course_name', '')} ({course_id})"
+                            st.session_state.selected_course_id = course_id
+                            st.session_state.chat_messages = []
+                            st.session_state.chat_course_id = course_id
+                            st.session_state.view_page = "course_detail"
+                            st.rerun()
+            elif courses_result["success"]:
+                render_placeholder(st, "Khóa học của tôi", "Chưa có khóa học để hiển thị.")
+            else:
+                render_placeholder(st, "Khóa học của tôi", "Không thể tải danh sách khóa học.")
+        with utility_column:
+            render_calendar_card(st)
+            render_upcoming_events(st)
+        st.stop()
 
     c_h1, c_h2 = st.columns(
         [3, 1]
