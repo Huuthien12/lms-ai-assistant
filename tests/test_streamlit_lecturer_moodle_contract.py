@@ -11,3 +11,9 @@ def test_lecturer_moodle_sync_uses_discovery_and_existing_ingestion_contract():
     assert '"resource_id": resource["resource_id"]' in SOURCE
     assert "Create KB" not in SOURCE
     assert "generated Markdown" not in SOURCE
+
+
+def test_roles_share_the_modern_sidebar_shell():
+    assert 'with st.sidebar:' in SOURCE
+    assert 'if role == "student":\n            st.markdown(' not in SOURCE
+    assert 'key="sidebar_logout"' in SOURCE

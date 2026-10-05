@@ -60,7 +60,7 @@ def inject_theme(st) -> None:
         [data-testid="stSidebar"] .stButton button:hover {{ background:#F1F7FF; color:{PRIMARY}; transform:translateX(2px); }}
         [data-testid="stSidebar"] .stButton button[kind="primary"] {{ background:{PRIMARY_LIGHT}; color:{PRIMARY}; border:0; }}
         [data-testid="stSidebar"] .stButton button[kind="primary"]:hover {{ background:{PRIMARY_LIGHT}; color:{PRIMARY}; transform:none; }}
-        [data-testid="stSidebar"] .st-key-student_logout button:hover {{ background:#FEF2F2; color:{ERROR}; }}
+        [data-testid="stSidebar"] .st-key-sidebar_logout button:hover {{ background:#FEF2F2; color:{ERROR}; }}
         .stButton > button[kind="primary"] {{ background:{PRIMARY}; border-color:{PRIMARY}; }}
         .stButton > button[kind="primary"]:hover {{ background:{PRIMARY_DARK}; border-color:{PRIMARY_DARK}; }}
         .student-welcome {{ min-height:190px; display:flex; align-items:center; justify-content:space-between; overflow:hidden;
