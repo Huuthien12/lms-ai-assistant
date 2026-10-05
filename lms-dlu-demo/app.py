@@ -6,7 +6,10 @@ import requests
 import streamlit as st
 from dotenv import load_dotenv
 
-from ui.components import render_course_card, render_placeholder, render_topbar, role_label
+from ui.components import (
+    render_citations, render_course_card, render_document_row, render_placeholder,
+    render_topbar, render_workspace_header, role_label,
+)
 from ui.theme import inject_theme
 
 
@@ -375,6 +378,9 @@ if "chat_messages" not in st.session_state:
 if "chat_course_id" not in st.session_state:
     st.session_state.chat_course_id = ""
 
+if "workspace_tab" not in st.session_state:
+    st.session_state.workspace_tab = "Tổng quan"
+
 
 # ==============================================================================
 # 6. LOGIN
@@ -610,7 +616,11 @@ else:
         st.caption(f"{role_label(role)} · {st.session_state.user_name}")
         for label, target in navigation:
             if st.button(label, key=f"nav_{target}", use_container_width=True):
-                st.session_state.view_page = target
+                if target in {"documents", "ai_tutor"} and st.session_state.selected_course_id:
+                    st.session_state.workspace_tab = "Tài liệu" if target == "documents" else "AI Tutor"
+                    st.session_state.view_page = "course_detail"
+                else:
+                    st.session_state.view_page = target
                 st.rerun()
 
     page_titles = {
@@ -1001,6 +1011,10 @@ else:
             st.session_state.selected_course_id
         )
 
+        workspace_tab = render_workspace_header(
+            st, course_id, st.session_state.selected_course or "Môn học"
+        )
+
         st.markdown(
             '<div class="dlu-breadcrumb">'
             'Bảng Điều khiển > '
@@ -1021,25 +1035,22 @@ else:
 
             st.rerun()
 
-        st.markdown(
-            "💬 **Thông báo chung**"
-        )
-
-        st.markdown(
-            "🍃 **Điểm danh lớp học**"
-        )
+        if workspace_tab == "Tổng quan":
+            st.markdown("💬 **Thông báo chung**")
+            st.markdown("🍃 **Điểm danh lớp học**")
 
 
         # ======================================================================
         # TÀI LIỆU MÔN HỌC
         # ======================================================================
 
-        st.markdown(
-            '<div class="section-green-title">'
-            'Tài liệu môn học'
-            '</div>',
-            unsafe_allow_html=True
-        )
+        if workspace_tab == "Tài liệu":
+            st.markdown(
+                '<div class="section-green-title">'
+                'Tài liệu môn học'
+                '</div>',
+                unsafe_allow_html=True
+            )
 
         materials_result = api_get(
             f"/courses/{course_id}/materials",
@@ -1053,7 +1064,7 @@ else:
                 .get("materials", [])
             )
 
-            if materials:
+            if workspace_tab == "Tài liệu" and materials:
 
                 for material in materials:
 
@@ -1089,9 +1100,7 @@ else:
 
                         icon = "📎"
 
-                    st.markdown(
-                        f"{icon} **{file_name}**"
-                    )
+                    render_document_row(st, material)
 
                     if uploaded_at:
 
@@ -1101,7 +1110,7 @@ else:
 
                     st.divider()
 
-            else:
+            elif workspace_tab == "Tài liệu":
 
                 st.info(
                     "Môn học này chưa có tài liệu."
@@ -1122,12 +1131,13 @@ else:
         # BÀI TẬP
         # ======================================================================
 
-        st.markdown(
-            '<div class="section-green-title">'
-            'Lý thuyết & Bài tập'
-            '</div>',
-            unsafe_allow_html=True
-        )
+        if workspace_tab == "Tổng quan":
+            st.markdown(
+                '<div class="section-green-title">'
+                'Lý thuyết & Bài tập'
+                '</div>',
+                unsafe_allow_html=True
+            )
 
         assignments_result = api_get(
             f"/courses/{course_id}/assignments",
@@ -1141,7 +1151,7 @@ else:
                 .get("assignments", [])
             )
 
-            if assignments:
+            if workspace_tab == "Tổng quan" and assignments:
 
                 for assignment in assignments:
 
@@ -1168,7 +1178,7 @@ else:
 
                     st.divider()
 
-            else:
+            elif workspace_tab == "Tổng quan":
 
                 st.caption(
                     "Chưa có bài tập."
@@ -1189,19 +1199,20 @@ else:
         # DEEPTUTOR / MATERIAL MANAGEMENT
         # ======================================================================
 
-        st.markdown(
-            '<div class="section-green-title">'
-            'Tài liệu tham khảo & DeepTutor AI'
-            '</div>',
-            unsafe_allow_html=True
-        )
+        if workspace_tab != "Tổng quan":
+            st.markdown(
+                '<div class="section-green-title">'
+                'Tài liệu tham khảo & DeepTutor AI'
+                '</div>',
+                unsafe_allow_html=True
+            )
 
 
         # ======================================================================
         # 10. GIẢNG VIÊN
         # ======================================================================
 
-        if st.session_state.user_role == "teacher":
+        if workspace_tab == "Tài liệu" and st.session_state.user_role == "teacher":
 
             st.subheader(
                 "👨‍🏫 Quản lý tài liệu môn học "
@@ -1323,7 +1334,7 @@ else:
         # 11. SINH VIÊN + DEEPTUTOR CHAT
         # ======================================================================
 
-        else:
+        elif workspace_tab == "AI Tutor" and st.session_state.user_role != "teacher":
 
             st.write(
                 "📖 Sinh viên có thể xem tài liệu "
@@ -1508,11 +1519,7 @@ else:
                             }
                         )
 
-                        for source in response_data.get("sources", []):
-                            if isinstance(source, dict):
-                                title = source.get("title") or source.get("source_id")
-                                if isinstance(title, str) and title:
-                                    st.caption(f"Source: {title}")
+                        render_citations(st, response_data.get("sources", []))
 
                         ai = response_data.get("ai")
                         if isinstance(ai, dict):
