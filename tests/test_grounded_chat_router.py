@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, MagicMock
 
 from fastapi import FastAPI
@@ -9,7 +10,9 @@ from fastapi.testclient import TestClient
 
 from backend.services.ai.grounded_chat import GroundedChatResponse, GroundedChatService
 from backend.services.ai.provider_base import LLMResult
+from deeptutor_integration.contracts import NormalizedDocument
 from deeptutor_integration.errors import DeepTutorError
+from deeptutor_integration.moodle_ingestion_ledger import MoodleIngestionLedger
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lms-dlu-demo"))
 from grounded_chat_router import create_grounded_chat_router, retrieved_contexts
@@ -64,6 +67,28 @@ def test_normalized_moodle_citations_prefer_original_filename_and_legacy_falls_b
         assert contexts[0].title == original_filename
         assert "hash.md" not in contexts[0].title
     assert retrieved_contexts({"sources": [{"content": "legacy", "title": "legacy.pdf"}]} )[0].title == "legacy.pdf"
+
+
+def test_generated_moodle_titles_resolve_through_ledger_without_guessing_unknowns():
+    with TemporaryDirectory() as directory:
+        ledger = MoodleIngestionLedger(Path(directory))
+        for document_id, original_filename in enumerate(
+            ("lecture.pdf", "lecture.docx", "lecture.pptx", "lecture.md"), start=1
+        ):
+            sha256 = f"{document_id:x}" * 64
+            ledger.record(NormalizedDocument(
+                document_id=str(document_id), course_id="INT1339",
+                original_filename=original_filename, original_mime_type="application/octet-stream",
+                source="moodle", sha256=sha256, markdown="fixture", normalizer_version="test-v1",
+            ))
+            contexts = retrieved_contexts({"sources": [{
+                "content": "Retrieved excerpt", "title": f"{document_id}-{sha256}.md",
+            }]}, ledger, "INT1339")
+            assert contexts[0].title == original_filename
+        unknown = retrieved_contexts({"sources": [{
+            "content": "Retrieved excerpt", "title": f"99-{'f' * 64}.md",
+        }]}, ledger, "INT1339")
+        assert unknown[0].title == f"99-{'f' * 64}.md"
 
 
 def test_public_endpoint_omits_internal_source_metadata():
