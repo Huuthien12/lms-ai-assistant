@@ -18,7 +18,7 @@ def inject_theme(st) -> None:
         f"""
         <style>
         .stApp {{ background: {BACKGROUND}; color: {TEXT_PRIMARY}; }}
-        .block-container {{ max-width: 1180px; padding-top: 1.5rem; padding-bottom: 2.5rem; }}
+        .block-container {{ max-width:none; padding:1.5rem 2rem 2.5rem; }}
         .lms-topbar {{ display:flex; justify-content:space-between; align-items:center;
           background:{SURFACE}; border:1px solid #E2E8F0; border-radius:14px;
           padding:.8rem 1.25rem; margin-bottom:1.5rem; box-shadow:0 2px 10px rgba(15,23,42,.05); }}
@@ -49,6 +49,7 @@ def inject_theme(st) -> None:
         .deeptutor-box {{ background:{PRIMARY_LIGHT} !important; border-left-color:{PRIMARY} !important; }}
         [data-testid="stSidebar"] {{ background:{SURFACE}; border-right:1px solid #E2E8F0; min-width:250px !important; width:250px !important; }}
         [data-testid="stSidebar"] > div:first-child {{ min-width:250px !important; width:250px !important; min-height:100vh; }}
+        @media (min-width:851px) {{ [data-testid="stSidebar"][aria-expanded="false"] {{ transform:translateX(0) !important; visibility:visible !important; }} [data-testid="stSidebar"][aria-expanded="false"] > div {{ transform:none !important; visibility:visible !important; }} [data-testid="stSidebarCollapsedControl"] {{ display:none !important; }} }}
         [data-testid="stSidebarUserContent"] {{ min-height:100vh; padding:1.2rem .8rem 1rem; }}
         .sidebar-brand {{ display:flex; align-items:center; gap:.75rem; padding:.35rem .45rem 1.25rem; color:{TEXT_PRIMARY}; }}
         .sidebar-brand > span {{ width:38px; height:38px; display:grid; place-items:center; border-radius:11px; background:{PRIMARY_LIGHT}; color:{PRIMARY}; font-size:1.35rem; }}
@@ -80,9 +81,9 @@ def inject_theme(st) -> None:
         .utility-card h3 {{ margin:0 0 .9rem; color:{TEXT_PRIMARY}; font-size:1rem; }} .utility-card h4 {{ margin:0 0 .8rem; text-align:center; color:{TEXT_MUTED}; font-size:.8rem; }}
         .calendar-grid {{ display:grid; grid-template-columns:repeat(7,1fr); gap:.28rem; text-align:center; }} .calendar-grid span {{ min-height:25px; display:grid; place-items:center; font-size:.75rem; color:{TEXT_MUTED}; }}
         .calendar-days span {{ font-weight:700; font-size:.65rem; }} .calendar-grid .calendar-today {{ color:#fff; background:{PRIMARY}; border-radius:50%; }} .utility-empty {{ color:{TEXT_MUTED}; background:{BACKGROUND}; border-radius:10px; padding:1rem; text-align:center; font-size:.84rem; }}
-        .stButton > button[kind="secondary"] {{ background:{SURFACE}; border:1px solid #CBD5E1; color:{TEXT_PRIMARY}; transition:background 180ms ease,border-color 180ms ease,color 180ms ease; }}
-        .stButton > button[kind="secondary"]:hover {{ background:{PRIMARY}; border-color:{PRIMARY}; color:#fff; }}
-        @media (max-width: 850px) {{ [data-testid="stSidebar"], [data-testid="stSidebar"] > div:first-child {{ min-width:auto !important; width:auto !important; }} .metric-card {{ flex-direction:column; }} .metric-item + .metric-item {{ border-left:0; border-top:1px solid #E2E8F0; }} .student-welcome {{ padding:1.35rem; }} }}
+        .stButton > button[data-testid="stBaseButton-secondary"] {{ background:{SURFACE}; border:1px solid #CBD5E1; color:{TEXT_PRIMARY}; transition:background 180ms ease,border-color 180ms ease,color 180ms ease; }}
+        .stButton > button[data-testid="stBaseButton-secondary"]:hover {{ background:{PRIMARY}; border-color:{PRIMARY}; color:#fff; }}
+        @media (max-width: 850px) {{ [data-testid="stSidebar"], [data-testid="stSidebar"] > div:first-child {{ min-width:auto !important; width:auto !important; }} [data-testid="stSidebarCollapsedControl"] {{ display:flex !important; }} .metric-card {{ flex-direction:column; }} .metric-item + .metric-item {{ border-left:0; border-top:1px solid #E2E8F0; }} .student-welcome {{ padding:1.35rem; }} }}
         </style>
         """,
         unsafe_allow_html=True,
