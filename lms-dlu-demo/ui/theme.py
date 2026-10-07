@@ -48,9 +48,11 @@ def inject_theme(st) -> None:
         .section-green-title {{ color:{PRIMARY_DARK} !important; border-bottom-color:{PRIMARY} !important; }}
         .deeptutor-box {{ background:{PRIMARY_LIGHT} !important; border-left-color:{PRIMARY} !important; }}
         [data-testid="stSidebar"] {{ background:linear-gradient(160deg,#063b78,#002a5c 72%,#001d44); border-right:0; }}
-        @media (min-width:851px) {{ [data-testid="stSidebar"][aria-expanded="true"], [data-testid="stSidebar"][aria-expanded="true"] > div:first-child {{ min-width:250px !important; width:250px !important; }} }}
-        [data-testid="stSidebarUserContent"] {{ min-height:100vh; padding:1.2rem .8rem 1rem; }}
-        [data-testid="stSidebarUserContent"] > div:first-child {{ display:flex; flex-direction:column; min-height:calc(100vh - 2.2rem); }}
+        @media (min-width:851px) {{ [data-testid="stSidebar"][aria-expanded="true"] {{ position:sticky !important; top:0; align-self:flex-start; min-width:250px !important; width:250px !important; height:100vh !important; }} [data-testid="stSidebar"][aria-expanded="true"] > div:first-child {{ min-width:250px !important; width:250px !important; height:100vh !important; }} }}
+        [data-testid="stSidebarContent"] {{ position:relative; height:100%; display:flex; flex-direction:column; }}
+        [data-testid="stSidebarUserContent"] {{ min-height:0; flex:1; padding:1.2rem .8rem 1rem; }}
+        [data-testid="stSidebar"] .st-key-sidebar_bottom_actions {{ position:absolute; right:.8rem; bottom:1rem; left:.8rem; }}
+        [data-testid="stSidebarUserContent"] > div:first-child {{ display:flex; flex-direction:column; min-height:100%; height:100%; }}
         [data-testid="stSidebarUserContent"] .st-key-sidebar_bottom_actions {{ margin-top:auto; }}
         .sidebar-brand {{ display:flex; align-items:center; gap:.75rem; padding:.35rem .45rem 1.25rem; color:#fff; }}
         .sidebar-brand > span {{ width:38px; height:38px; display:grid; place-items:center; border-radius:11px; background:rgba(255,255,255,.12); color:#fff; font-size:1.35rem; }}
@@ -84,6 +86,8 @@ def inject_theme(st) -> None:
         .calendar-days span {{ font-weight:700; font-size:.65rem; }} .calendar-grid .calendar-today {{ color:#fff; background:{PRIMARY}; border-radius:50%; }} .utility-empty {{ color:{TEXT_MUTED}; background:{BACKGROUND}; border-radius:10px; padding:1rem; text-align:center; font-size:.84rem; }}
         .stButton > button[data-testid="stBaseButton-secondary"] {{ background:{SURFACE}; border:1px solid #CBD5E1; color:{TEXT_PRIMARY}; transition:background 180ms ease,border-color 180ms ease,color 180ms ease; }}
         .stButton > button[data-testid="stBaseButton-secondary"]:hover {{ background:{PRIMARY}; border-color:{PRIMARY}; color:#fff; }}
+        [data-testid="stSidebar"] .stButton > button[data-testid="stBaseButton-secondary"] {{ background:transparent; border:0; color:#E7F1FF; }}
+        [data-testid="stSidebar"] .stButton > button[data-testid="stBaseButton-secondary"]:hover {{ background:rgba(76,159,255,.22); border:0; color:#fff; }}
         .lms-search {{ min-width:min(38vw,520px); border:1px solid #D7E2F2; border-radius:999px; padding:.65rem 1rem; color:#5D7190; font-size:.9rem; background:#fff; }}
         .lms-topbar {{ border:0; border-radius:0; margin:-1.5rem -2rem 1.5rem; padding:.8rem 2rem; box-shadow:0 1px 0 #E2E8F0; }}
         .lms-login-brand {{ max-width:980px; margin:2rem auto 1.4rem; display:flex; align-items:center; gap:.85rem; color:#071B4D; }} .lms-login-brand > span {{ width:48px; height:48px; display:grid; place-items:center; border-radius:14px; background:linear-gradient(135deg,{PRIMARY_DARK},{PRIMARY}); color:#fff; font-size:1.45rem; }} .lms-login-brand strong {{ display:block; font-size:1.35rem; }} .lms-login-brand small {{ display:block; margin-top:.15rem; color:{TEXT_MUTED}; }} .lms-login-title {{ margin:0 0 .35rem; color:#071B4D; font-size:1.65rem; }} .lms-login-copy {{ margin:0 0 1.1rem; color:{TEXT_MUTED}; }}
