@@ -609,9 +609,12 @@ else:
 
     role = st.session_state.user_role
     navigation = (
-        [("Tổng quan", "dashboard"), ("Môn học", "courses"), ("Tài liệu", "documents"), ("Đồng bộ DeepTutor", "sync")]
+        [("⌂  Trang chủ", "dashboard"), ("▣  Khóa học Moodle", "courses"), ("▤  Tài liệu & Đồng bộ", "documents"),
+         ("☷  Quiz & Bài tập", "quiz"), ("▥  Thống kê", "progress"), ("✦  Trò chuyện AI", "ai_tutor")]
         if role == "teacher"
-        else [("⌂ Tổng quan", "dashboard"), ("▣ Môn học", "courses"), ("▤ Tài liệu", "documents"), ("✦ AI Tutor", "ai_tutor")]
+        else [("⌂  Trang chủ", "dashboard"), ("▣  Khóa học của tôi", "courses"), ("▤  Tài liệu", "documents"),
+              ("✦  Trò chuyện AI", "ai_tutor"), ("◉  Quiz luyện tập", "quiz"), ("▤  Flashcard", "flashcards"),
+              ("▥  Tiến độ học tập", "progress")]
     )
     with st.sidebar:
         st.markdown(
@@ -629,7 +632,9 @@ else:
                 st.rerun()
         with st.container(key="sidebar_bottom_actions"):
             st.divider()
-            st.button("⚙ Cài đặt", key="sidebar_settings", use_container_width=True, disabled=True)
+            if st.button("⚙  Cài đặt", key="sidebar_settings", use_container_width=True):
+                st.session_state.view_page = "settings"
+                st.rerun()
             if st.button("↪ Đăng xuất", key="sidebar_logout", use_container_width=True):
                 st.session_state.logged_in = False
                 st.session_state.login_failed = False
@@ -643,6 +648,7 @@ else:
     page_titles = {
         "dashboard": "Tổng quan", "courses": "Môn học", "course_detail": "Chi tiết môn học",
         "documents": "Tài liệu", "ai_tutor": "AI Tutor", "sync": "Đồng bộ DeepTutor",
+        "quiz": "Quiz & Bài tập", "flashcards": "Flashcard", "progress": "Tiến độ học tập", "settings": "Cài đặt",
     }
     render_topbar(
         st,
@@ -788,26 +794,40 @@ else:
     if st.session_state.view_page in {"dashboard", "courses"}:
 
         if role == "teacher":
-            st.markdown("#### Môn học Moodle phụ trách")
+            if st.session_state.view_page == "dashboard":
+                render_page_header(
+                    st, eyebrow="Trang chủ", title="Xin chào, giảng viên!",
+                    description="Tổng quan các khóa học và hoạt động giảng dạy.",
+                )
+                metrics = st.columns(4)
+                for column, (value, label) in zip(metrics, [("--", "Tổng số khóa học"), ("--", "Tổng sinh viên"), ("--", "Tài liệu đã chia sẻ"), ("--", "Tổng bài kiểm tra")]):
+                    with column:
+                        st.metric(label, value)
+            else:
+                render_page_header(st, eyebrow="Trang chủ › Moodle Courses", title="Khóa học Moodle", description="Quản lý và đồng bộ dữ liệu khóa học từ Moodle với DeepTutor.")
+            st.markdown("<h2 class='lms-section-title'>Khóa học Moodle phụ trách</h2>", unsafe_allow_html=True)
             moodle_courses = api_get("/moodle/courses", timeout=15)
             if not moodle_courses["success"]:
-                st.error("Không thể tải danh sách môn học Moodle.")
+                render_error_state(st, "Không thể tải danh sách môn học Moodle. Vui lòng kiểm tra kết nối Moodle và thử lại.")
             elif not moodle_courses["data"]:
-                st.info("Chưa có môn học Moodle.")
+                render_placeholder(st, "Chưa có khóa học Moodle", "Các khóa học được phân quyền sẽ xuất hiện tại đây.")
             else:
                 for course in moodle_courses["data"]:
                     shortname = str(course.get("shortname") or "")
                     fullname = str(course.get("fullname") or shortname)
                     with st.container(border=True):
-                        st.markdown(f"**{fullname}**")
-                        st.caption(shortname)
-                        if st.button("Mở tài liệu Moodle", key=f"moodle_course_{course.get('id')}", use_container_width=True):
-                            st.session_state.selected_moodle_course_id = int(course["id"])
-                            st.session_state.selected_course_id = shortname
-                            st.session_state.selected_course = f"{fullname} ({shortname})"
-                            st.session_state.view_page = "course_detail"
-                            st.session_state.workspace_tab = "Tài liệu"
-                            st.rerun()
+                        row_info, row_action = st.columns([5, 1])
+                        with row_info:
+                            st.markdown(f"**{fullname}**")
+                            st.caption(shortname)
+                        with row_action:
+                            if st.button("Xem chi tiết", key=f"moodle_course_{course.get('id')}", use_container_width=True):
+                                st.session_state.selected_moodle_course_id = int(course["id"])
+                                st.session_state.selected_course_id = shortname
+                                st.session_state.selected_course = f"{fullname} ({shortname})"
+                                st.session_state.view_page = "course_detail"
+                                st.session_state.workspace_tab = "Tài liệu"
+                                st.rerun()
             st.stop()
 
         st.markdown(
@@ -1056,6 +1076,34 @@ else:
     # 9. COURSE DETAIL
     # ==========================================================================
 
+    elif st.session_state.view_page == "settings":
+        render_page_header(st, eyebrow="Trang chủ › Cài đặt", title="Cài đặt", description="Thông tin tài khoản và tùy chọn giao diện.")
+        profile, preferences = st.columns([1.4, 1])
+        with profile:
+            with st.container(border=True):
+                st.subheader("Hồ sơ cá nhân")
+                st.text_input("Họ và tên", value=st.session_state.user_name, disabled=True)
+                st.text_input("Mã tài khoản", value=st.session_state.user_id, disabled=True)
+                st.caption("Thông tin hồ sơ được quản lý bởi hệ thống nguồn.")
+        with preferences:
+            with st.container(border=True):
+                st.subheader("Tùy chọn giao diện")
+                st.radio("Giao diện", ["Sáng", "Tự động"], horizontal=True, disabled=True)
+                st.caption("Các tùy chọn lưu hồ sơ chưa có API công khai.")
+
+    elif st.session_state.view_page in {"quiz", "flashcards", "progress"}:
+        titles = {
+            "quiz": ("Quiz luyện tập", "Chọn một môn học để bắt đầu làm quiz từ nội dung được giảng viên cung cấp."),
+            "flashcards": ("Flashcard", "Chọn một môn học để ôn tập bằng flashcard."),
+            "progress": ("Tiến độ học tập", "Dữ liệu tiến độ sẽ hiển thị khi có thông tin học tập phù hợp."),
+        }
+        title, message = titles[st.session_state.view_page]
+        render_page_header(st, eyebrow="Trang chủ", title=title, description=message)
+        render_placeholder(st, title, message)
+        if st.button("Chọn môn học", type="primary", key=f"{st.session_state.view_page}_courses"):
+            st.session_state.view_page = "courses"
+            st.rerun()
+
     elif st.session_state.view_page == "documents":
         render_placeholder(
             st,
@@ -1090,7 +1138,7 @@ else:
         )
 
         workspace_tab = render_workspace_header(
-            st, course_id, st.session_state.selected_course or "Môn học"
+            st, course_id, st.session_state.selected_course or "Môn học", role
         )
 
         st.markdown(
@@ -1132,7 +1180,7 @@ else:
 
         if st.session_state.user_role == "teacher" and st.session_state.get("selected_moodle_course_id"):
             resources_result = api_get(f"/moodle/courses/{st.session_state.selected_moodle_course_id}/resources", timeout=30)
-            if workspace_tab == "Tài liệu" and resources_result["success"]:
+            if workspace_tab in {"Tài liệu", "Đồng bộ DeepTutor"} and resources_result["success"]:
                 for resource in resources_result["data"]:
                     with st.container(border=True):
                         st.markdown(f"**{resource.get('filename', 'Tài liệu')}**")
@@ -1148,8 +1196,8 @@ else:
                                 st.rerun()
                             else:
                                 st.error("Đồng bộ DeepTutor thất bại.")
-            elif workspace_tab == "Tài liệu":
-                st.error("Không thể tải tài liệu Moodle.")
+            elif workspace_tab in {"Tài liệu", "Đồng bộ DeepTutor"}:
+                render_error_state(st, "Không thể tải tài liệu Moodle.")
             materials_result = {"success": True, "data": {"materials": []}}
         else:
             materials_result = api_get(
@@ -1697,11 +1745,6 @@ else:
                                 "❌ Không thể xóa lịch sử chat."
                             )
 
-                            st.code(
-                                f"HTTP {response.status_code}\n"
-                                f"{response.text}"
-                            )
-
                     except requests.exceptions.ConnectionError:
 
                         st.error(
@@ -1717,5 +1760,12 @@ else:
                     except Exception as e:
 
                         st.error(
-                            f"❌ Lỗi khi xóa lịch sử chat: {e}"
+                            "❌ Không thể xóa lịch sử chat."
                         )
+
+        if workspace_tab in {"Quiz", "Flashcard", "Tiến độ", "Quiz & Bài tập", "Sinh viên", "Thống kê"}:
+            labels = {
+                "Quiz": "Quiz luyện tập", "Flashcard": "Flashcard", "Tiến độ": "Tiến độ học tập",
+                "Quiz & Bài tập": "Quiz & Bài tập", "Sinh viên": "Sinh viên", "Thống kê": "Thống kê",
+            }
+            render_placeholder(st, labels[workspace_tab], "Chưa có dữ liệu công khai phù hợp cho khóa học này.")

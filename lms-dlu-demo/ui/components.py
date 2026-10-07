@@ -109,9 +109,12 @@ def render_error_state(st, message: str) -> None:
     )
 
 
-def render_workspace_header(st, course_id: str, course_name: str) -> str:
+def render_workspace_header(st, course_id: str, course_name: str, role: str = "student") -> str:
     st.markdown(f"<h1 class='lms-page-title'>{escape(course_name)}</h1><p class='course-code'>{escape(course_id)}</p>", unsafe_allow_html=True)
-    return st.radio("Course workspace", ["Tổng quan", "Tài liệu", "AI Tutor"], horizontal=True, label_visibility="collapsed", key="workspace_tab")
+    tabs = ["Tổng quan", "Tài liệu", "AI Tutor", "Quiz", "Flashcard", "Tiến độ"]
+    if role == "teacher":
+        tabs = ["Tổng quan", "Tài liệu", "Đồng bộ DeepTutor", "Quiz & Bài tập", "Sinh viên", "Thống kê"]
+    return st.radio("Course workspace", tabs, horizontal=True, label_visibility="collapsed", key="workspace_tab")
 
 
 def render_document_row(st, material: dict[str, Any]) -> None:
