@@ -47,19 +47,19 @@ def inject_theme(st) -> None:
         .dlu-black-nav {{ background:{PRIMARY_DARK} !important; border-radius:10px; }}
         .section-green-title {{ color:{PRIMARY_DARK} !important; border-bottom-color:{PRIMARY} !important; }}
         .deeptutor-box {{ background:{PRIMARY_LIGHT} !important; border-left-color:{PRIMARY} !important; }}
-        [data-testid="stSidebar"] {{ background:{SURFACE}; border-right:1px solid #E2E8F0; }}
+        [data-testid="stSidebar"] {{ background:linear-gradient(160deg,#063b78,#002a5c 72%,#001d44); border-right:0; }}
         @media (min-width:851px) {{ [data-testid="stSidebar"][aria-expanded="true"], [data-testid="stSidebar"][aria-expanded="true"] > div:first-child {{ min-width:250px !important; width:250px !important; }} }}
         [data-testid="stSidebarUserContent"] {{ min-height:100vh; padding:1.2rem .8rem 1rem; }}
         [data-testid="stSidebarUserContent"] > div:first-child {{ display:flex; flex-direction:column; min-height:calc(100vh - 2.2rem); }}
         [data-testid="stSidebarUserContent"] .st-key-sidebar_bottom_actions {{ margin-top:auto; }}
-        .sidebar-brand {{ display:flex; align-items:center; gap:.75rem; padding:.35rem .45rem 1.25rem; color:{TEXT_PRIMARY}; }}
-        .sidebar-brand > span {{ width:38px; height:38px; display:grid; place-items:center; border-radius:11px; background:{PRIMARY_LIGHT}; color:{PRIMARY}; font-size:1.35rem; }}
-        .sidebar-brand strong {{ display:block; font-size:1.05rem; }} .sidebar-brand small {{ display:block; margin-top:.1rem; color:{TEXT_MUTED}; font-size:.76rem; }}
+        .sidebar-brand {{ display:flex; align-items:center; gap:.75rem; padding:.35rem .45rem 1.25rem; color:#fff; }}
+        .sidebar-brand > span {{ width:38px; height:38px; display:grid; place-items:center; border-radius:11px; background:rgba(255,255,255,.12); color:#fff; font-size:1.35rem; }}
+        .sidebar-brand strong {{ display:block; font-size:1.2rem; }} .sidebar-brand small {{ display:block; margin-top:.1rem; color:#B8D8FF; font-size:.76rem; }}
         [data-testid="stSidebar"] .stButton button {{ min-height:48px; padding:.7rem .9rem; text-align:left; border:0; background:transparent;
-          color:{TEXT_PRIMARY}; border-radius:11px; font-weight:600; transition:background 180ms ease,color 180ms ease,transform 180ms ease; cursor:pointer; }}
-        [data-testid="stSidebar"] .stButton button:hover {{ background:#F1F7FF; color:{PRIMARY}; transform:translateX(2px); }}
-        [data-testid="stSidebar"] .stButton button[kind="primary"] {{ background:{PRIMARY_LIGHT}; color:{PRIMARY}; border:0; }}
-        [data-testid="stSidebar"] .stButton button[kind="primary"]:hover {{ background:{PRIMARY_LIGHT}; color:{PRIMARY}; transform:none; }}
+          color:#E7F1FF; border-radius:11px; font-weight:600; transition:background 180ms ease,color 180ms ease,transform 180ms ease; cursor:pointer; }}
+        [data-testid="stSidebar"] .stButton button:hover {{ background:rgba(76,159,255,.22); color:#fff; transform:translateX(2px); }}
+        [data-testid="stSidebar"] .stButton button[kind="primary"] {{ background:#087df5; color:#fff; border:0; box-shadow:0 6px 18px rgba(0,0,0,.12); }}
+        [data-testid="stSidebar"] .stButton button[kind="primary"]:hover {{ background:#168cff; color:#fff; transform:none; }}
         [data-testid="stSidebar"] .st-key-sidebar_logout button:hover {{ background:#FEF2F2; color:{ERROR}; }}
         .stButton > button[kind="primary"] {{ background:{PRIMARY}; border-color:{PRIMARY}; }}
         .stButton > button[kind="primary"]:hover {{ background:{PRIMARY_DARK}; border-color:{PRIMARY_DARK}; }}
@@ -84,6 +84,14 @@ def inject_theme(st) -> None:
         .calendar-days span {{ font-weight:700; font-size:.65rem; }} .calendar-grid .calendar-today {{ color:#fff; background:{PRIMARY}; border-radius:50%; }} .utility-empty {{ color:{TEXT_MUTED}; background:{BACKGROUND}; border-radius:10px; padding:1rem; text-align:center; font-size:.84rem; }}
         .stButton > button[data-testid="stBaseButton-secondary"] {{ background:{SURFACE}; border:1px solid #CBD5E1; color:{TEXT_PRIMARY}; transition:background 180ms ease,border-color 180ms ease,color 180ms ease; }}
         .stButton > button[data-testid="stBaseButton-secondary"]:hover {{ background:{PRIMARY}; border-color:{PRIMARY}; color:#fff; }}
+        .lms-search {{ min-width:min(38vw,520px); border:1px solid #D7E2F2; border-radius:999px; padding:.65rem 1rem; color:#5D7190; font-size:.9rem; background:#fff; }}
+        .lms-topbar {{ border:0; border-radius:0; margin:-1.5rem -2rem 1.5rem; padding:.8rem 2rem; box-shadow:0 1px 0 #E2E8F0; }}
+        .page-header {{ display:flex; justify-content:space-between; gap:1rem; align-items:flex-start; padding:.5rem 0 1.2rem; }}
+        .page-header h1 {{ margin:.15rem 0; color:#071B4D; font-size:2rem; }} .page-header p {{ margin:0; color:#587095; }}
+        .lms-breadcrumb {{ font-size:.82rem; color:{PRIMARY}; font-weight:700; }} .lms-status {{ background:#DCFCE7; color:#15803D; border-radius:999px; padding:.45rem .9rem; font-weight:700; font-size:.85rem; }}
+        .status-badge {{ display:inline-block; border-radius:999px; padding:.25rem .6rem; font-size:.76rem; font-weight:700; }}
+        .status-badge.success {{ background:#DCFCE7; color:#15803D; }} .status-badge.warning {{ background:#FEF3C7; color:#B45309; }} .status-badge.error {{ background:#FEE2E2; color:#B91C1C; }} .status-badge.muted {{ background:#E8EEF7; color:#53657D; }}
+        .lms-empty {{ min-height:230px; display:grid; place-content:center; gap:.45rem; text-align:center; padding:2rem; }} .lms-empty h3 {{ margin:0; color:#071B4D; }} .lms-empty p {{ margin:0; }} .state-icon {{ width:72px; height:72px; margin:auto; display:grid; place-items:center; border-radius:22px; background:#E7F1FF; color:{PRIMARY}; font-size:2rem; }} .error-state .state-icon {{ background:#FEE2E2; color:{ERROR}; }}
         @media (max-width: 850px) {{ [data-testid="stSidebar"], [data-testid="stSidebar"] > div:first-child {{ min-width:auto !important; width:auto !important; }} [data-testid="stSidebarCollapsedControl"] {{ display:flex !important; }} .metric-card {{ flex-direction:column; }} .metric-item + .metric-item {{ border-left:0; border-top:1px solid #E2E8F0; }} .student-welcome {{ padding:1.35rem; }} }}
         </style>
         """,

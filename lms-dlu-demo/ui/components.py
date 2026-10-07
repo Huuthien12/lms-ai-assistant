@@ -17,9 +17,8 @@ def render_topbar(st, *, title: str, user_name: str, role: str, user_id: str = "
     st.markdown(
         f"""
         <div class="lms-topbar">
-          <div><p class="lms-brand">LMS DeepTutor · Đại học Đà Lạt</p>
-          <p class="lms-subtitle">{title}</p></div>
-          <div class="lms-account"><span class="lms-notice">●</span><span class="lms-avatar">{initial}</span>
+          <div class="lms-search">⌕ <span>Tìm kiếm khóa học, tài liệu, ...</span></div>
+          <div class="lms-account"><span class="lms-notice">♧</span><span class="lms-avatar">{initial}</span>
           <span><strong>{escape(user_name)}</strong><small>{role_label(role)}{f' · {escape(user_id)}' if user_id else ''}</small></span><span>⌄</span></div>
         </div>
         """,
@@ -83,7 +82,31 @@ def render_course_card(st, course: dict[str, Any]) -> None:
 
 def render_placeholder(st, title: str, message: str) -> None:
     st.markdown(f"<h2 class='lms-page-title'>{title}</h2>", unsafe_allow_html=True)
-    st.markdown(f"<div class='lms-empty'>{message}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='lms-empty'><div class='state-icon'>◇</div><h3>Chưa có dữ liệu</h3><p>{escape(message)}</p></div>", unsafe_allow_html=True)
+
+
+def render_page_header(st, *, eyebrow: str, title: str, description: str = "", status: str = "") -> None:
+    badge = f"<span class='lms-status'>{escape(status)}</span>" if status else ""
+    st.markdown(
+        f"<div class='page-header'><div><p class='lms-breadcrumb'>{escape(eyebrow)}</p>"
+        f"<h1>{escape(title)}</h1><p>{escape(description)}</p></div>{badge}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_status_badge(st, status: str) -> None:
+    labels = {"indexed": ("Đã đồng bộ", "success"), "not_synced": ("Chưa đồng bộ", "muted"),
+              "superseded": ("Đã thay thế", "warning"), "deleted": ("Đã xóa", "error")}
+    label, tone = labels.get(status, ("Đang xử lý", "warning"))
+    st.markdown(f"<span class='status-badge {tone}'>{label}</span>", unsafe_allow_html=True)
+
+
+def render_error_state(st, message: str) -> None:
+    st.markdown(
+        f"<div class='lms-empty error-state'><div class='state-icon'>!</div><h3>Không thể tải nội dung</h3>"
+        f"<p>{escape(message)}</p></div>",
+        unsafe_allow_html=True,
+    )
 
 
 def render_workspace_header(st, course_id: str, course_name: str) -> str:

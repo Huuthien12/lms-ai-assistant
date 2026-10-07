@@ -10,6 +10,7 @@ from ui.components import (
     render_academic_metrics, render_calendar_card, render_citations, render_course_card,
     render_dashboard_course_card, render_document_row, render_placeholder, render_topbar,
     render_upcoming_events, render_welcome_banner, render_workspace_header, role_label,
+    render_error_state, render_page_header, render_status_badge,
 )
 from ui.theme import inject_theme
 
