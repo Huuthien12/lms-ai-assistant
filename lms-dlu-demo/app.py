@@ -54,7 +54,7 @@ st.markdown("""
 /* Reset & Font */
 
 body, .stApp {
-    background-color: #ffffff !important;
+    background-color: #f6f8fb !important;
     font-family: -apple-system, BlinkMacSystemFont,
                  "Segoe UI", Roboto,
                  "Helvetica Neue", Arial, sans-serif;
@@ -200,8 +200,8 @@ div[data-testid="stVerticalBlockBorderWrapper"] > div {
 /* Button */
 
 div.stButton > button[kind="primary"] {
-    background-color: #519200 !important;
-    border-color: #519200 !important;
+    background-color: #1565c0 !important;
+    border-color: #1565c0 !important;
     color: white !important;
 }
 
@@ -391,12 +391,9 @@ if "workspace_tab" not in st.session_state:
 if not st.session_state.logged_in:
 
     st.markdown(
-        '<div class="dlu-header-banner">'
-        '<h1 class="dlu-logo-text">TRƯỜNG ĐẠI HỌC ĐÀ LẠT</h1>'
-        '<div style="font-size:11px;color:#519200;font-weight:bold;">DALAT UNIVERSITY</div>'
-        '<div class="dlu-logo-sub">HỆ THỐNG HỌC TẬP TRỰC TUYẾN - LMS</div>'
-        '</div>',
-        unsafe_allow_html=True
+        '<div class="lms-login-brand"><span>✦</span><div><strong>LMS DeepTutor</strong>'
+        '<small>Đại học Đà Lạt · Hệ thống học tập trực tuyến</small></div></div>',
+        unsafe_allow_html=True,
     )
 
     st.write("")
@@ -413,9 +410,8 @@ if not st.session_state.logged_in:
     with col_left:
 
         st.markdown(
-            "<h3 style='font-size:20px;font-weight:bold;color:#333;'>"
-            "Hệ thống quản lý học tập Trường Đại học Đà Lạt LMS-DLU"
-            "</h3>",
+            "<h3 class='lms-login-title'>Chào mừng trở lại</h3>"
+            "<p class='lms-login-copy'>Đăng nhập để tiếp tục hành trình học tập của bạn.</p>",
             unsafe_allow_html=True
         )
 
@@ -766,6 +762,11 @@ else:
 
 
     # ==========================================================================
+    # The authenticated shell is rendered by the persistent sidebar and topbar.
+    # Clear the legacy header containers so they do not reserve vertical space.
+    c_h1.empty()
+    c_h2.empty()
+
     # BLACK NAV
     # ==========================================================================
 
@@ -1258,7 +1259,10 @@ else:
 
                     st.divider()
 
-            elif workspace_tab == "Tài liệu":
+            elif workspace_tab == "Tài liệu" and not (
+                st.session_state.user_role == "teacher"
+                and st.session_state.get("selected_moodle_course_id")
+            ):
 
                 st.info(
                     "Môn học này chưa có tài liệu."

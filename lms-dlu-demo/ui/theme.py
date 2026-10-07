@@ -44,7 +44,7 @@ def inject_theme(st) -> None:
           color:{TEXT_PRIMARY}; padding:.85rem 1rem; margin:.75rem 0; }}
         .dlu-header-banner {{ border-bottom-color:#E2E8F0; }}
         .dlu-logo-text, .dlu-logo-sub {{ color:{PRIMARY_DARK} !important; }}
-        .dlu-black-nav {{ background:{PRIMARY_DARK} !important; border-radius:10px; }}
+        .dlu-black-nav {{ display:none !important; }}
         .section-green-title {{ color:{PRIMARY_DARK} !important; border-bottom-color:{PRIMARY} !important; }}
         .deeptutor-box {{ background:{PRIMARY_LIGHT} !important; border-left-color:{PRIMARY} !important; }}
         [data-testid="stSidebar"] {{ background:linear-gradient(160deg,#063b78,#002a5c 72%,#001d44); border-right:0; }}
@@ -86,12 +86,14 @@ def inject_theme(st) -> None:
         .stButton > button[data-testid="stBaseButton-secondary"]:hover {{ background:{PRIMARY}; border-color:{PRIMARY}; color:#fff; }}
         .lms-search {{ min-width:min(38vw,520px); border:1px solid #D7E2F2; border-radius:999px; padding:.65rem 1rem; color:#5D7190; font-size:.9rem; background:#fff; }}
         .lms-topbar {{ border:0; border-radius:0; margin:-1.5rem -2rem 1.5rem; padding:.8rem 2rem; box-shadow:0 1px 0 #E2E8F0; }}
+        .lms-login-brand {{ max-width:980px; margin:2rem auto 1.4rem; display:flex; align-items:center; gap:.85rem; color:#071B4D; }} .lms-login-brand > span {{ width:48px; height:48px; display:grid; place-items:center; border-radius:14px; background:linear-gradient(135deg,{PRIMARY_DARK},{PRIMARY}); color:#fff; font-size:1.45rem; }} .lms-login-brand strong {{ display:block; font-size:1.35rem; }} .lms-login-brand small {{ display:block; margin-top:.15rem; color:{TEXT_MUTED}; }} .lms-login-title {{ margin:0 0 .35rem; color:#071B4D; font-size:1.65rem; }} .lms-login-copy {{ margin:0 0 1.1rem; color:{TEXT_MUTED}; }}
         .page-header {{ display:flex; justify-content:space-between; gap:1rem; align-items:flex-start; padding:.5rem 0 1.2rem; }}
         .page-header h1 {{ margin:.15rem 0; color:#071B4D; font-size:2rem; }} .page-header p {{ margin:0; color:#587095; }}
         .lms-breadcrumb {{ font-size:.82rem; color:{PRIMARY}; font-weight:700; }} .lms-status {{ background:#DCFCE7; color:#15803D; border-radius:999px; padding:.45rem .9rem; font-weight:700; font-size:.85rem; }}
         .status-badge {{ display:inline-block; border-radius:999px; padding:.25rem .6rem; font-size:.76rem; font-weight:700; }}
         .status-badge.success {{ background:#DCFCE7; color:#15803D; }} .status-badge.warning {{ background:#FEF3C7; color:#B45309; }} .status-badge.error {{ background:#FEE2E2; color:#B91C1C; }} .status-badge.muted {{ background:#E8EEF7; color:#53657D; }}
         .lms-empty {{ min-height:230px; display:grid; place-content:center; gap:.45rem; text-align:center; padding:2rem; }} .lms-empty h3 {{ margin:0; color:#071B4D; }} .lms-empty p {{ margin:0; }} .state-icon {{ width:72px; height:72px; margin:auto; display:grid; place-items:center; border-radius:22px; background:#E7F1FF; color:{PRIMARY}; font-size:2rem; }} .error-state .state-icon {{ background:#FEE2E2; color:{ERROR}; }}
+        [data-testid="stRadio"] > div {{ gap:.45rem; flex-wrap:wrap; }} [data-testid="stRadio"] label {{ background:{SURFACE}; border:1px solid #D7E2F2; border-radius:999px; padding:.35rem .7rem; color:#405675; }} [data-testid="stRadio"] label:has(input:checked) {{ background:{PRIMARY_LIGHT}; border-color:{PRIMARY}; color:{PRIMARY_DARK}; font-weight:700; }}
         @media (max-width: 850px) {{ [data-testid="stSidebar"], [data-testid="stSidebar"] > div:first-child {{ min-width:auto !important; width:auto !important; }} [data-testid="stSidebarCollapsedControl"] {{ display:flex !important; }} .metric-card {{ flex-direction:column; }} .metric-item + .metric-item {{ border-left:0; border-top:1px solid #E2E8F0; }} .student-welcome {{ padding:1.35rem; }} }}
         </style>
         """,
