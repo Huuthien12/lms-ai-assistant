@@ -61,6 +61,16 @@ def render_student_courses_hero(st, course_count: int) -> None:
     )
 
 
+def render_course_detail_hero(st, course_id: str, course_name: str) -> None:
+    st.markdown(
+        f"<div class='course-breadcrumb'>Khóa học của tôi　›　{escape(course_id)}</div>"
+        f"<div class='course-detail-hero'><div class='course-detail-icon'>▣</div><div>"
+        f"<div class='course-code'>{escape(course_id)}</div><h1>{escape(course_name)}</h1>"
+        f"<p>Thông tin khóa học được hiển thị từ dữ liệu được cấp quyền.</p></div></div>",
+        unsafe_allow_html=True,
+    )
+
+
 def render_student_course_card(st, course: dict[str, Any], accent: str) -> None:
     course_id = escape(str(course.get("course_id", "")))
     course_name = escape(str(course.get("course_name", "Môn học")))

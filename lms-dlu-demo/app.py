@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from ui.components import (
     render_academic_metrics, render_calendar_card, render_citations, render_course_card,
     render_dashboard_course_card, render_document_row, render_placeholder, render_topbar,
-    render_student_course_card, render_student_courses_hero,
+    render_course_detail_hero, render_student_course_card, render_student_courses_hero,
     render_upcoming_events, render_welcome_banner, render_workspace_header, role_label,
     render_error_state, render_page_header, render_status_badge,
 )
@@ -1207,11 +1207,19 @@ else:
             st.session_state.selected_course_id
         )
 
+        if role == "student":
+            render_course_detail_hero(st, course_id, st.session_state.selected_course or "Môn học")
+            if st.button("← Quay lại khóa học", key="student_course_back"):
+                st.session_state.view_page = "courses"
+                st.rerun()
         workspace_tab = render_workspace_header(
             st, course_id, st.session_state.selected_course or "Môn học", role
         )
 
-        st.markdown(
+        if role == "student":
+            st.empty()
+        else:
+            st.markdown(
             '<div class="dlu-breadcrumb">'
             'Bảng Điều khiển > '
             'Các khoá học của tôi > '
@@ -1219,9 +1227,9 @@ else:
             f'{st.session_state.selected_course}'
             '</div>',
             unsafe_allow_html=True
-        )
+            )
 
-        if st.button(
+        if role != "student" and st.button(
             "⬅️ Quay lại Bảng điều khiển"
         ):
 
@@ -1231,7 +1239,9 @@ else:
 
             st.rerun()
 
-        if workspace_tab == "Tổng quan":
+        if workspace_tab == "Tổng quan" and role == "student":
+            render_placeholder(st, "Tổng quan khóa học", "Chọn Tài liệu hoặc AI Tutor để tiếp tục học theo nội dung được cấp quyền.")
+        elif workspace_tab == "Tổng quan":
             st.markdown("💬 **Thông báo chung**")
             st.markdown("🍃 **Điểm danh lớp học**")
 
