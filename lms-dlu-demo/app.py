@@ -41,7 +41,7 @@ st.set_page_config(
     page_title="Hệ thống quản lý học tập Trường Đại học Đà Lạt LMS-DLU",
     page_icon="🎓",
     layout="wide",
-    initial_sidebar_state=250
+    initial_sidebar_state="expanded"
 )
 
 # ==============================================================================
@@ -679,9 +679,9 @@ else:
                             st.session_state.view_page = "course_detail"
                             st.rerun()
             elif courses_result["success"]:
-                render_placeholder(st, "Khóa học của tôi", "Chưa có khóa học để hiển thị.")
+                render_placeholder(st, "Chưa có khóa học", "Chưa có khóa học để hiển thị.")
             else:
-                render_placeholder(st, "Khóa học của tôi", "Không thể tải danh sách khóa học.")
+                render_placeholder(st, "Không thể tải khóa học", "Không thể tải danh sách khóa học.")
         with utility_column:
             render_calendar_card(st)
             render_upcoming_events(st)
