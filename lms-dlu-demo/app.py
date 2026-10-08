@@ -1458,6 +1458,18 @@ else:
                 unsafe_allow_html=True
             )
 
+            _, context_panel = st.columns([2.3, 1], gap="large")
+            with context_panel:
+                st.markdown("#### Tài liệu liên quan")
+                related_materials = materials_result["data"].get("materials", []) if materials_result["success"] else []
+                if related_materials:
+                    for material in related_materials[:4]:
+                        render_document_row(st, material)
+                else:
+                    st.caption("Chưa có tài liệu công khai cho môn học này.")
+                st.markdown("#### Lịch sử trò chuyện")
+                st.caption("Lịch sử chỉ được giữ trong phiên học hiện tại.")
+
             # ------------------------------------------------------------------
             # Nếu đổi môn -> reset chat trên giao diện
             # ------------------------------------------------------------------
