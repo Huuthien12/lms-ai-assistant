@@ -71,6 +71,23 @@ def render_course_detail_hero(st, course_id: str, course_name: str) -> None:
     )
 
 
+def render_student_course_overview(st, course_id: str, course_name: str) -> None:
+    description = "Thông tin khóa học được hiển thị từ dữ liệu được cấp quyền."
+    left, right = st.columns([2, 1], gap="large")
+    with left:
+        st.markdown(
+            f"<div class='course-overview-card'><h2>▤　Giới thiệu môn học</h2>"
+            f"<p>{description}</p></div>", unsafe_allow_html=True,
+        )
+    with right:
+        st.markdown(
+            f"<div class='course-overview-card'><h2>ⓘ　Thông tin cơ bản</h2>"
+            f"<dl><dt>Mã môn học</dt><dd>{escape(course_id)}</dd>"
+            f"<dt>Tên môn học</dt><dd>{escape(course_name)}</dd>"
+            f"<dt>Mô tả</dt><dd>{description}</dd></dl></div>", unsafe_allow_html=True,
+        )
+
+
 def render_student_course_card(st, course: dict[str, Any], accent: str) -> None:
     course_id = escape(str(course.get("course_id", "")))
     course_name = escape(str(course.get("course_name", "Môn học")))

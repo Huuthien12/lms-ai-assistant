@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from ui.components import (
     render_academic_metrics, render_calendar_card, render_citations, render_course_card,
     render_dashboard_course_card, render_document_row, render_placeholder, render_topbar,
-    render_course_detail_hero, render_student_course_card, render_student_courses_hero,
+    render_course_detail_hero, render_student_course_card, render_student_course_overview, render_student_courses_hero,
     render_upcoming_events, render_welcome_banner, render_workspace_header, role_label,
     render_error_state, render_page_header, render_status_badge,
 )
@@ -1240,7 +1240,7 @@ else:
             st.rerun()
 
         if workspace_tab == "Tổng quan" and role == "student":
-            render_placeholder(st, "Tổng quan khóa học", "Chọn Tài liệu hoặc AI Tutor để tiếp tục học theo nội dung được cấp quyền.")
+            render_student_course_overview(st, course_id, st.session_state.selected_course or "Môn học")
         elif workspace_tab == "Tổng quan":
             st.markdown("💬 **Thông báo chung**")
             st.markdown("🍃 **Điểm danh lớp học**")
