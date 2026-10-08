@@ -1196,49 +1196,29 @@ else:
             )
 
             if workspace_tab == "Tài liệu" and materials:
-
+                search_col, format_col, sort_col = st.columns([3, 2, 1])
+                with search_col:
+                    document_query = st.text_input("Tìm kiếm tài liệu", placeholder="Tìm kiếm tài liệu trong môn học...", key="document_query")
+                with format_col:
+                    document_format = st.radio("Loại tệp", ["Tất cả", "PDF", "DOCX", "PPTX", "MD"], horizontal=True, key="document_format")
+                with sort_col:
+                    document_sort = st.selectbox("Sắp xếp", ["Tên"], key="document_sort")
+                query = document_query.strip().casefold()
+                visible_materials = []
                 for material in materials:
-
-                    file_name = material.get(
-                        "file_name",
-                        "Tài liệu"
-                    )
-
-                    uploaded_at = material.get(
-                        "uploaded_at",
-                        ""
-                    )
-
-                    extension = (
-                        file_name.split(".")[-1].lower()
-                        if "." in file_name
-                        else ""
-                    )
-
-                    if extension == "pdf":
-
-                        icon = "📕"
-
-                    elif extension == "docx":
-
-                        icon = "📘"
-
-                    elif extension == "txt":
-
-                        icon = "📄"
-
-                    else:
-
-                        icon = "📎"
-
+                    name = str(material.get("file_name") or "Tài liệu")
+                    suffix = name.rsplit(".", 1)[-1].upper() if "." in name else ""
+                    if (not query or query in name.casefold()) and (document_format == "Tất cả" or suffix == document_format):
+                        visible_materials.append(material)
+                visible_materials.sort(key=lambda material: str(material.get("file_name") or "").casefold())
+                if not visible_materials:
+                    render_placeholder(st, "Không tìm thấy tài liệu", "Thử thay đổi từ khóa hoặc loại tệp.")
+                for material in visible_materials:
                     render_document_row(st, material)
-
+                    uploaded_at = material.get("uploaded_at")
                     if uploaded_at:
-
-                        st.caption(
-                            f"Ngày tải lên: {uploaded_at}"
-                        )
-
+                        st.caption(f"Cập nhật: {uploaded_at}")
+                    st.caption("Xem và tải xuống chưa khả dụng vì API chưa cung cấp URL công khai an toàn.")
                     st.divider()
 
             elif workspace_tab == "Tài liệu" and not (
