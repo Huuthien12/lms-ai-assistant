@@ -1450,22 +1450,10 @@ else:
 
         elif workspace_tab == "AI Tutor" and st.session_state.user_role != "teacher":
 
-            st.write(
-                "📖 Sinh viên có thể xem tài liệu "
-                "học tập do giảng viên cung cấp "
-                "cho môn học này."
-            )
-
-            st.info(
-                "💡 Bạn có thể hỏi DeepTutor AI "
-                "các nội dung liên quan trực tiếp "
-                "đến tài liệu của môn học."
-            )
-
             st.markdown(
-                '<div class="deeptutor-box">'
-                '<b>🤖 DeepTutor AI</b><br>'
-                'Trợ lý học tập AI của môn học.'
+                '<div class="ai-tutor-header">'
+                '<b>✦ AI Tutor</b><br>'
+                'Trợ lý học tập dựa trên tài liệu công khai của môn học.'
                 '</div>',
                 unsafe_allow_html=True
             )
@@ -1542,6 +1530,9 @@ else:
             # ------------------------------------------------------------------
             # DISPLAY CHAT
             # ------------------------------------------------------------------
+
+            if not st.session_state.chat_messages:
+                render_placeholder(st, "Bắt đầu trò chuyện", "Đặt câu hỏi về tài liệu của môn học để nhận câu trả lời có nguồn tham khảo.")
 
             for message in (
                 st.session_state.chat_messages
