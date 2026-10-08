@@ -41,7 +41,7 @@ st.set_page_config(
     page_title="Hệ thống quản lý học tập Trường Đại học Đà Lạt LMS-DLU",
     page_icon="🎓",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state=250
 )
 
 # ==============================================================================
@@ -224,10 +224,6 @@ div.stButton > button[kind="primary"] {
 }
 
 footer {
-    visibility: hidden;
-}
-
-header {
     visibility: hidden;
 }
 
