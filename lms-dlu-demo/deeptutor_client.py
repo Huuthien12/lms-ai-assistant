@@ -25,11 +25,13 @@ class MockDeepTutorClient:
 
 
 class RealDeepTutorClient:
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, service_token: str | None = None):
         self.base_url = base_url.rstrip("/")
+        self.service_token = service_token if service_token is not None else os.getenv("LMS_MOODLE_DISCOVERY_TOKEN")
 
     def ingest_resource(self, course_id_moodle: int, resource_id: int, kb_name: str | None = None) -> dict[str, Any]:
-        response = httpx.post(f"{self.base_url}/moodle/resources/ingest", json={"course_id_moodle": course_id_moodle, "resource_id": resource_id, "kb_name": kb_name}, timeout=30)
+        headers = {"X-Internal-Api-Key": self.service_token} if self.service_token else None
+        response = httpx.post(f"{self.base_url}/moodle/resources/ingest", json={"course_id_moodle": course_id_moodle, "resource_id": resource_id, "kb_name": kb_name}, headers=headers, timeout=30)
         response.raise_for_status()
         return response.json()
 

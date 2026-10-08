@@ -35,6 +35,10 @@ class MoodleIngestionLedger:
     def lifecycle(self, document: NormalizedDocument) -> str | None:
         return self._records().get(self._key(document), {}).get("lifecycle")
 
+    def resource_lifecycle(self, course_id: str, document_id: str) -> str | None:
+        matches = [value for value in self._records().values() if value.get("course_id") == course_id and value.get("document_id") == document_id]
+        return max(matches, key=lambda value: value.get("indexed_at", "")).get("lifecycle") if matches else None
+
     def original_filename(self, course_id: str, document_id: str, sha256: str) -> str | None:
         record = self._records().get(f"{course_id}:{document_id}:{sha256}", {})
         value = record.get("original_filename")

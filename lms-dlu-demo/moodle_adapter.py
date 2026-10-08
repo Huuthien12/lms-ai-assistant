@@ -1,6 +1,7 @@
 import os
 import requests
 from dotenv import load_dotenv
+from pathlib import Path
 
 from deeptutor_integration.contracts import SourceDocument
 
@@ -41,6 +42,45 @@ class MoodleAdapter:
 
         return data
 
+    def _enrolled_courses(self):
+        response = self._call_ws(
+            "core_course_get_enrolled_courses_by_timeline_classification",
+            classification="all",
+        )
+        courses = response.get("courses") if isinstance(response, dict) else None
+        if not isinstance(courses, list):
+            raise RuntimeError("Moodle course data is invalid.")
+        return [
+            {"id": int(course["id"]), "shortname": str(course.get("shortname") or ""),
+             "fullname": str(course.get("fullname") or "")}
+            for course in courses
+            if isinstance(course, dict) and str(course.get("id", "")).isdigit()
+        ]
+
+    def list_courses(self):
+        return self._enrolled_courses()
+
+    def get_course(self, course_id_moodle):
+        course = next((item for item in self._enrolled_courses() if item["id"] == course_id_moodle), None)
+        if not course:
+            raise RuntimeError("Moodle course was not found.")
+        return course
+
+    def list_file_resources(self, course_id_moodle):
+        resources_resp = self._call_ws("mod_resource_get_resources_by_courses", **{"courseids[0]": course_id_moodle})
+        resources = resources_resp.get("resources", []) if isinstance(resources_resp, dict) else []
+        output = []
+        for resource in resources:
+            files = resource.get("contentfiles", []) if isinstance(resource, dict) else []
+            file_info = next((item for item in files if isinstance(item, dict) and item.get("filename") and item.get("fileurl")), None)
+            if not file_info or not str(resource.get("id", "")).isdigit():
+                continue
+            extension = Path(str(file_info["filename"])).suffix.lower()
+            output.append({"resource_id": int(resource["id"]), "filename": str(file_info["filename"]),
+                           "mime_type": str(file_info.get("mimetype") or "application/octet-stream"),
+                           "format": extension[1:].upper() if extension in {".pdf", ".docx", ".pptx", ".md"} else "UNSUPPORTED"})
+        return output
+
     def get_source_document(self, course_id_moodle, resource_id) -> SourceDocument:
         """
         Lấy thông tin file, download và chuẩn hóa metadata.
@@ -48,7 +88,7 @@ class MoodleAdapter:
         resource_id: ID của tài nguyên file
         """
         # 1. Lấy thông tin khóa học
-        courses = self._call_ws("core_course_get_courses", **{"options[ids][0]": course_id_moodle})
+        courses = self._enrolled_courses()
         if not courses or not isinstance(courses, list):
             raise RuntimeError("Không tìm thấy khóa học hoặc dữ liệu khóa học không hợp lệ")
         course_info = next(

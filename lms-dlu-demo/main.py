@@ -3,7 +3,7 @@
 # FASTAPI BACKEND - LMS DLU + SQL SERVER + DEEPTUTOR
 # ==============================================================================
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import Depends, FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -68,6 +68,7 @@ from backend.services.ai.orchestrator import AIOrchestrator
 from grounded_chat_router import create_grounded_chat_router
 from moodle_adapter import MoodleAdapter
 from moodle_ingestion_router import create_moodle_ingestion_router
+from moodle_service_auth import create_moodle_service_dependency, require_moodle_service
 from readiness_router import create_readiness_router
 from quiz_lifecycle import QuizRepository, create_quiz_router
 from learning_evidence import LearningEvidenceRepository, create_learning_router
@@ -110,13 +111,20 @@ DEEPTUTOR_SERVICE = DeepTutorService(DEEPTUTOR_CONFIG)
 DEEPTUTOR_DIR = str(DEEPTUTOR_CONFIG.deeptutor_dir)
 DEEPTUTOR_EXE = str(DEEPTUTOR_CONFIG.executable)
 
-app.include_router(create_deeptutor_router(DEEPTUTOR_SERVICE))
+app.include_router(create_deeptutor_router(
+    DEEPTUTOR_SERVICE,
+    write_authorizer=create_moodle_service_dependency(os.getenv("LMS_MOODLE_DISCOVERY_TOKEN")),
+))
 
 try:
     MOODLE_ADAPTER = MoodleAdapter()
 except ValueError:
     MOODLE_ADAPTER = None
-app.include_router(create_moodle_ingestion_router(MOODLE_ADAPTER, DEEPTUTOR_SERVICE))
+app.include_router(create_moodle_ingestion_router(
+    MOODLE_ADAPTER,
+    DEEPTUTOR_SERVICE,
+    service_token=os.getenv("LMS_MOODLE_DISCOVERY_TOKEN"),
+))
 
 _deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
 _ollama_provider = OllamaProvider(
@@ -1197,7 +1205,8 @@ def check_material(
 # ==============================================================================
 
 @app.post(
-    "/upload-material/"
+    "/upload-material/",
+    dependencies=[Depends(require_moodle_service)],
 )
 async def upload_material(
     course_id: str = Form(...),
