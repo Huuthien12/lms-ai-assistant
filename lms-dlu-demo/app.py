@@ -1213,12 +1213,12 @@ else:
                 visible_materials.sort(key=lambda material: str(material.get("file_name") or "").casefold())
                 if not visible_materials:
                     render_placeholder(st, "Không tìm thấy tài liệu", "Thử thay đổi từ khóa hoặc loại tệp.")
+                st.caption("Xem và tải xuống chưa khả dụng vì API chưa cung cấp URL công khai an toàn.")
                 for material in visible_materials:
                     render_document_row(st, material)
                     uploaded_at = material.get("uploaded_at")
                     if uploaded_at:
-                        st.caption(f"Cập nhật: {uploaded_at}")
-                    st.caption("Xem và tải xuống chưa khả dụng vì API chưa cung cấp URL công khai an toàn.")
+                        st.caption(f"Cập nhật: {str(uploaded_at)[:10]}")
                     st.divider()
 
             elif workspace_tab == "Tài liệu" and not (

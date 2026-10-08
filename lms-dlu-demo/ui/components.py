@@ -169,8 +169,18 @@ def render_workspace_header(st, course_id: str, course_name: str, role: str = "s
 def render_document_row(st, material: dict[str, Any]) -> None:
     name = escape(str(material.get("file_name") or "Tài liệu"))
     suffix = name.rsplit(".", 1)[-1].upper() if "." in name else "FILE"
+    icon = {"PDF": "▣", "DOCX": "▤", "PPTX": "▰", "MD": "▧"}.get(suffix, "▧")
     uploaded = str(material.get("uploaded_at") or "")
-    st.markdown(f"<div class='course-card'><div class='course-code'>{suffix}</div><div class='course-name'>{name}</div><div class='course-meta'>{escape(uploaded) if uploaded else 'Thông tin tài liệu'}</div></div>", unsafe_allow_html=True)
+    try:
+        uploaded = date.fromisoformat(uploaded[:10]).strftime("%d/%m/%Y")
+    except ValueError:
+        uploaded = ""
+    metadata = " · ".join(part for part in (suffix, uploaded) if part)
+    st.markdown(
+        f"<div class='document-row'><span class='document-icon {suffix.lower()}'>{icon}</span>"
+        f"<div><strong>{name}</strong><small>{metadata or 'Thông tin tài liệu'}</small></div></div>",
+        unsafe_allow_html=True,
+    )
 
 
 def public_citation_titles(sources: list[dict[str, Any]]) -> list[str]:
