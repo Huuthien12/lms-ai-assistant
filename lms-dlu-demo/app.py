@@ -1425,7 +1425,8 @@ else:
                                 "/upload-material/",
                                 data=data,
                                 files=files,
-                                timeout=120
+                                timeout=120,
+                                headers=MOODLE_DISCOVERY_HEADERS,
                             )
 
                         if upload_result["success"]:
