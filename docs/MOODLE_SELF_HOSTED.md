@@ -22,7 +22,7 @@ Compose project `deeptutor-moodle` creates the `deeptutor-moodle` and `deeptutor
 
 After initial setup, create a least-privilege integration user, enable Web Services and REST, create an external service, and grant only these functions used by `MoodleAdapter`:
 
-- `core_course_get_courses`
+- `core_course_get_enrolled_courses_by_timeline_classification`
 - `mod_resource_get_resources_by_courses`
 
 Create a token for that integration user. Store it only in ignored `.env` as `MOODLE_TOKEN`; set `MOODLE_BASE_URL=http://127.0.0.1:8088`. Never place the token in Compose, source code, screenshots, or Git.

@@ -52,6 +52,16 @@ python -m venv lms-dlu-demo\venv
 lms-dlu-demo\venv\Scripts\python.exe -m pip install -r lms-dlu-demo\requirements.txt
 ```
 
+## Tests
+
+Use Python 3.11 and the LMS development requirements. Do not use the DeepTutor
+submodule environment for LMS tests.
+
+```powershell
+lms-dlu-demo\venv\Scripts\python.exe -m pip install -r lms-dlu-demo\requirements-dev.txt
+lms-dlu-demo\venv\Scripts\python.exe -m pytest -q
+```
+
 ## Run the LMS demo
 
 From Windows, run:
