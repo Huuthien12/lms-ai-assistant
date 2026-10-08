@@ -51,6 +51,28 @@ def render_dashboard_course_card(st, course: dict[str, Any], accent: str) -> Non
     )
 
 
+def render_student_courses_hero(st, course_count: int) -> None:
+    st.markdown(
+        f"<div class='courses-hero'><div><h1>Khóa học của tôi</h1>"
+        f"<p>Danh sách các khóa học bạn đang tham gia</p></div>"
+        f"<div class='courses-hero-art'>▣</div></div>"
+        f"<div class='courses-count'>▣ Tất cả ({course_count})</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_student_course_card(st, course: dict[str, Any], accent: str) -> None:
+    course_id = escape(str(course.get("course_id", "")))
+    course_name = escape(str(course.get("course_name", "Môn học")))
+    description = escape(str(course.get("description") or "Chưa có mô tả môn học."))
+    st.markdown(
+        f"<div class='student-course {accent}'><div class='student-course-banner'><span>▣</span></div>"
+        f"<div class='student-course-body'><div class='course-code'>{course_id}</div>"
+        f"<h3>{course_name}</h3><p>{description}</p></div></div>",
+        unsafe_allow_html=True,
+    )
+
+
 def render_calendar_card(st) -> None:
     current = date.today()
     weeks = calendar.monthcalendar(current.year, current.month)
