@@ -293,7 +293,8 @@ def api_post(
     json_data=None,
     data=None,
     files=None,
-    timeout=120
+    timeout=120,
+    headers=None,
 ):
 
     try:
@@ -303,6 +304,7 @@ def api_post(
             json=json_data,
             data=data,
             files=files,
+            headers=headers,
             timeout=timeout
         )
 
@@ -1179,7 +1181,7 @@ else:
                         if status == "indexed":
                             st.caption(f"KB: {resource.get('kb_id', '')}")
                         elif resource.get("format") != "UNSUPPORTED" and st.button("Đồng bộ DeepTutor", key=f"sync_{resource.get('resource_id')}"):
-                            result = api_post("/moodle/resources/ingest", json_data={"course_id_moodle": st.session_state.selected_moodle_course_id, "resource_id": resource["resource_id"]}, timeout=180)
+                            result = api_post("/moodle/resources/ingest", json_data={"course_id_moodle": st.session_state.selected_moodle_course_id, "resource_id": resource["resource_id"]}, timeout=180, headers=MOODLE_DISCOVERY_HEADERS)
                             if result["success"]:
                                 st.success("Đã đồng bộ DeepTutor.")
                                 st.rerun()

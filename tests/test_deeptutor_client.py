@@ -37,6 +37,7 @@ def test_factory_selects_real_by_default_and_for_explicit_real_values(monkeypatc
 def test_real_client_maps_authoritative_ingestion_contract(monkeypatch):
     monkeypatch.setenv("USE_MOCK_API", "false")
     monkeypatch.setenv("DEEPTUTOR_API_BASE_URL", "http://api.test")
+    monkeypatch.setenv("LMS_MOODLE_DISCOVERY_TOKEN", "test-moodle-token")
     response = MagicMock()
     response.json.return_value = {"status": "ready"}
     with patch("deeptutor_client.httpx.post", return_value=response) as post:
@@ -44,6 +45,7 @@ def test_real_client_maps_authoritative_ingestion_contract(monkeypatch):
 
     assert post.call_args.args[0] == "http://api.test/moodle/resources/ingest"
     assert post.call_args.kwargs["json"] == {"course_id_moodle": 9, "resource_id": 1, "kb_name": "int1339-python"}
+    assert post.call_args.kwargs["headers"] == {"X-Internal-Api-Key": "test-moodle-token"}
 
 
 def test_real_client_maps_authoritative_grounded_chat_contract():

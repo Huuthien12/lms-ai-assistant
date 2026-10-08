@@ -6,6 +6,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock
 
+import httpx
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -16,6 +18,9 @@ from deeptutor_integration.moodle_ingestion_ledger import MoodleIngestionLedger
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lms-dlu-demo"))
 from moodle_ingestion_router import create_moodle_ingestion_router
+
+
+SERVICE_TOKEN = "test-moodle-token"
 
 
 class StubNormalizer:
@@ -39,9 +44,60 @@ def client(moodle_adapter, deeptutor_service, ledger=None, normalizer=None):
     if isinstance(ledger, MagicMock):
         ledger.contains.return_value = False
     app.include_router(create_moodle_ingestion_router(
-        moodle_adapter, deeptutor_service, normalizer or StubNormalizer(), ledger
+        moodle_adapter, deeptutor_service, normalizer or StubNormalizer(), ledger, SERVICE_TOKEN
     ))
-    return TestClient(app)
+    return TestClient(app, headers={"X-Internal-Api-Key": SERVICE_TOKEN})
+
+
+@pytest.mark.asyncio
+async def test_ingestion_rejects_invalid_service_credentials_before_side_effects():
+    moodle = MagicMock()
+    normalizer = MagicMock()
+    deeptutor = MagicMock()
+    ledger = MagicMock()
+    app = FastAPI()
+    app.include_router(create_moodle_ingestion_router(
+        moodle, deeptutor, normalizer, ledger, SERVICE_TOKEN
+    ))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as http_client:
+        missing = await http_client.post("/moodle/resources/ingest", json={"course_id_moodle": 9, "resource_id": 1})
+        invalid = await http_client.post(
+            "/moodle/resources/ingest",
+            headers={"X-Internal-Api-Key": "wrong"},
+            json={"course_id_moodle": 9, "resource_id": 1},
+        )
+
+    assert missing.status_code == invalid.status_code == 401
+    moodle.get_source_document.assert_not_called()
+    normalizer.normalize.assert_not_called()
+    ledger.contains.assert_not_called()
+    ledger.record.assert_not_called()
+    deeptutor.ingest_document.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_ingestion_fails_closed_without_a_configured_service_token():
+    moodle = MagicMock()
+    normalizer = MagicMock()
+    deeptutor = MagicMock()
+    ledger = MagicMock()
+    app = FastAPI()
+    app.include_router(create_moodle_ingestion_router(moodle, deeptutor, normalizer, ledger, ""))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as http_client:
+        response = await http_client.post(
+            "/moodle/resources/ingest",
+            headers={"X-Internal-Api-Key": SERVICE_TOKEN},
+            json={"course_id_moodle": 9, "resource_id": 1},
+        )
+
+    assert response.status_code == 503
+    moodle.get_source_document.assert_not_called()
+    normalizer.normalize.assert_not_called()
+    ledger.contains.assert_not_called()
+    ledger.record.assert_not_called()
+    deeptutor.ingest_document.assert_not_called()
 
 
 def test_ingests_normalized_markdown_without_secret_response_data():

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import hmac
+import os
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from deeptutor_integration.contracts import DocumentInput, NormalizedDocument
@@ -11,6 +11,7 @@ from deeptutor_integration.document_normalizer import DocumentNormalizer
 from deeptutor_integration.errors import DeepTutorError
 from deeptutor_integration.moodle_ingestion_ledger import MoodleIngestionLedger
 from deeptutor_integration.service import DeepTutorService
+from moodle_service_auth import create_moodle_service_dependency
 
 
 class MoodleIngestionInput(BaseModel):
@@ -24,27 +25,17 @@ def create_moodle_ingestion_router(
     deeptutor_service: DeepTutorService,
     normalizer: DocumentNormalizer | None = None,
     ledger: MoodleIngestionLedger | None = None,
-    discovery_token: str | None = None,
+    service_token: str | None = None,
 ) -> APIRouter:
     router = APIRouter(tags=["moodle-ingestion"])
     normalizer = normalizer or DocumentNormalizer()
     ledger = ledger or MoodleIngestionLedger(deeptutor_service.config.runtime_dir)
 
-    def require_discovery_service(
-        x_internal_api_key: str | None = Header(default=None),
-    ) -> None:
-        if not discovery_token:
-            raise HTTPException(
-                status_code=503,
-                detail={"code": "moodle_discovery_not_configured", "message": "Moodle discovery is not configured."},
-            )
-        if not x_internal_api_key or not hmac.compare_digest(x_internal_api_key, discovery_token):
-            raise HTTPException(
-                status_code=401,
-                detail={"code": "moodle_discovery_unauthorized", "message": "Moodle discovery authorization is required."},
-            )
+    require_configured_moodle_service = create_moodle_service_dependency(
+        os.getenv("LMS_MOODLE_DISCOVERY_TOKEN") if service_token is None else service_token
+    )
 
-    @router.get("/moodle/courses", dependencies=[Depends(require_discovery_service)])
+    @router.get("/moodle/courses", dependencies=[Depends(require_configured_moodle_service)])
     def list_moodle_courses() -> list[dict[str, Any]]:
         if moodle_adapter is None:
             raise HTTPException(status_code=503, detail={"code": "moodle_unavailable", "message": "Moodle is not configured."})
@@ -53,7 +44,7 @@ def create_moodle_ingestion_router(
         except Exception as exc:
             raise HTTPException(status_code=502, detail={"code": "moodle_discovery_unavailable", "message": "Unable to retrieve Moodle courses."}) from exc
 
-    @router.get("/moodle/courses/{course_id_moodle}/resources", dependencies=[Depends(require_discovery_service)])
+    @router.get("/moodle/courses/{course_id_moodle}/resources", dependencies=[Depends(require_configured_moodle_service)])
     def list_moodle_resources(course_id_moodle: int) -> list[dict[str, Any]]:
         if moodle_adapter is None:
             raise HTTPException(status_code=503, detail={"code": "moodle_unavailable", "message": "Moodle is not configured."})
@@ -89,7 +80,7 @@ def create_moodle_ingestion_router(
             kb_id=kb_id,
         )
 
-    @router.post("/moodle/resources/ingest")
+    @router.post("/moodle/resources/ingest", dependencies=[Depends(require_configured_moodle_service)])
     def ingest_moodle_resource(request: MoodleIngestionInput) -> dict[str, Any]:
         if moodle_adapter is None:
             raise HTTPException(

@@ -29,7 +29,7 @@ Create a token for that integration user. Store it only in ignored `.env` as `MO
 
 ## INT1339 migration
 
-Prefer Moodle's official course backup/restore from MoodleCloud. Restore the course while preserving the logical shortname `INT1339`; numeric course and resource IDs may change. Verify the required `Chuong 1.pdf` resource through the REST service, then call `POST /moodle/resources/ingest` using the new numeric IDs. The existing resolver keeps `INT1339 → int1339-python`.
+Prefer Moodle's official course backup/restore from MoodleCloud. Restore the course while preserving the logical shortname `INT1339`; numeric course and resource IDs may change. Verify the required `Chuong 1.pdf` resource through the REST service, then call `POST /moodle/resources/ingest` using the new numeric IDs and the server-only `X-Internal-Api-Key` header. The existing resolver keeps `INT1339 → int1339-python`.
 
 If MoodleCloud backup/download needs login, MFA, or administrator access unavailable to the automation, perform only that download/restore yourself and do not share credentials or tokens.
 

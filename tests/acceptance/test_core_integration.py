@@ -70,9 +70,9 @@ def test_moodle_ingestion_uses_the_mapped_kb_and_normalized_markdown(tmp_path):
     moodle = MagicMock()
     moodle.get_source_document.return_value = source
     app = FastAPI()
-    app.include_router(create_moodle_ingestion_router(moodle, service, normalizer=normalizer))
+    app.include_router(create_moodle_ingestion_router(moodle, service, normalizer=normalizer, service_token="test-moodle-token"))
 
-    response = TestClient(app).post("/moodle/resources/ingest", json={"course_id_moodle": 9, "resource_id": 1})
+    response = TestClient(app).post("/moodle/resources/ingest", headers={"X-Internal-Api-Key": "test-moodle-token"}, json={"course_id_moodle": 9, "resource_id": 1})
 
     assert response.status_code == 200
     assert response.json()["kb_id"] == "int1339-python"

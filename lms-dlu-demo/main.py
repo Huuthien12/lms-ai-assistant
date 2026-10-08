@@ -119,7 +119,7 @@ except ValueError:
 app.include_router(create_moodle_ingestion_router(
     MOODLE_ADAPTER,
     DEEPTUTOR_SERVICE,
-    discovery_token=os.getenv("LMS_MOODLE_DISCOVERY_TOKEN"),
+    service_token=os.getenv("LMS_MOODLE_DISCOVERY_TOKEN"),
 ))
 
 _deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")

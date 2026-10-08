@@ -12,7 +12,7 @@ from moodle_ingestion_router import create_moodle_ingestion_router
 from deeptutor_integration.moodle_ingestion_ledger import MoodleIngestionLedger
 
 
-def discovery_app(discovery_token="test-discovery-token"):
+def discovery_app(service_token="test-discovery-token"):
     moodle = MagicMock()
     moodle.list_courses.return_value = [{"id": 5, "shortname": "INT2001", "fullname": "AI"}]
     moodle.get_course.return_value = {"id": 5, "shortname": "INT2001", "fullname": "AI"}
@@ -29,7 +29,7 @@ def discovery_app(discovery_token="test-discovery-token"):
         moodle,
         service,
         ledger=MoodleIngestionLedger(service.config.runtime_dir),
-        discovery_token=discovery_token,
+        service_token=service_token,
     ))
     return app, moodle
 
@@ -52,7 +52,7 @@ async def test_moodle_discovery_requires_a_valid_internal_credential():
 
 @pytest.mark.asyncio
 async def test_moodle_discovery_fails_closed_when_server_token_is_unconfigured():
-    app, moodle = discovery_app(discovery_token=None)
+    app, moodle = discovery_app(service_token=None)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         response = await client.get("/moodle/courses", headers={"X-Internal-Api-Key": "any-value"})
