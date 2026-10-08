@@ -688,6 +688,41 @@ else:
             render_upcoming_events(st)
         st.stop()
 
+    if role == "student" and st.session_state.view_page == "courses":
+        courses_result = api_get("/courses", timeout=15)
+        courses_data = courses_result["data"].get("courses", []) if courses_result["success"] else []
+        render_student_courses_hero(st, len(courses_data))
+        if not courses_result["success"]:
+            render_error_state(st, "Không thể tải danh sách khóa học. Vui lòng thử lại.")
+            if st.button("Thử tải lại", key="student_courses_retry"):
+                st.rerun()
+            st.stop()
+        controls_left, controls_right = st.columns([3, 1])
+        with controls_left:
+            course_query = st.text_input("Tìm kiếm khóa học", placeholder="Tìm kiếm khóa học...", key="student_courses_query")
+        with controls_right:
+            sort_by = st.selectbox("Sắp xếp", ["Mã môn học", "Tên khóa học"], key="student_courses_sort")
+        query = course_query.strip().casefold()
+        visible_courses = [course for course in courses_data if not query or query in str(course.get("course_id", "")).casefold() or query in str(course.get("course_name", "")).casefold()]
+        visible_courses.sort(key=lambda course: str(course.get("course_id" if sort_by == "Mã môn học" else "course_name", "")).casefold())
+        if not visible_courses:
+            render_placeholder(st, "Không tìm thấy khóa học", "Thử thay đổi từ khóa tìm kiếm.")
+            st.stop()
+        cards = st.columns(3)
+        accents = ["violet", "sky", "amber"]
+        for index, course in enumerate(visible_courses):
+            course_id, course_name = str(course.get("course_id", "")), str(course.get("course_name", ""))
+            with cards[index % 3]:
+                render_student_course_card(st, course, accents[index % len(accents)])
+                if st.button("Xem chi tiết  →", key=f"student_course_{course_id}", use_container_width=True):
+                    st.session_state.selected_course = f"{course_name} ({course_id})"
+                    st.session_state.selected_course_id = course_id
+                    st.session_state.chat_messages = []
+                    st.session_state.chat_course_id = course_id
+                    st.session_state.view_page = "course_detail"
+                    st.rerun()
+        st.stop()
+
     c_h1, c_h2 = st.columns(
         [3, 1]
     )
