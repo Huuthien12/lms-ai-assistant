@@ -116,7 +116,11 @@ try:
     MOODLE_ADAPTER = MoodleAdapter()
 except ValueError:
     MOODLE_ADAPTER = None
-app.include_router(create_moodle_ingestion_router(MOODLE_ADAPTER, DEEPTUTOR_SERVICE))
+app.include_router(create_moodle_ingestion_router(
+    MOODLE_ADAPTER,
+    DEEPTUTOR_SERVICE,
+    discovery_token=os.getenv("LMS_MOODLE_DISCOVERY_TOKEN"),
+))
 
 _deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
 _ollama_provider = OllamaProvider(

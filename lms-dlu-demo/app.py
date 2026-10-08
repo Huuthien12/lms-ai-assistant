@@ -24,6 +24,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
 FASTAPI_URL = os.getenv("LMS_FASTAPI_URL", "http://127.0.0.1:8000")
+MOODLE_DISCOVERY_HEADERS = {"X-Internal-Api-Key": os.getenv("LMS_MOODLE_DISCOVERY_TOKEN", "")}
 
 DEMO_AUTH_ENABLED = os.getenv("LMS_DEMO_AUTH_ENABLED", "false").lower() in {
     "1",
@@ -238,12 +239,13 @@ inject_theme(st)
 # 4. API FUNCTIONS
 # ==============================================================================
 
-def api_get(endpoint, timeout=15):
+def api_get(endpoint, timeout=15, headers=None):
 
     try:
 
         response = requests.get(
             f"{FASTAPI_URL}{endpoint}",
+            headers=headers,
             timeout=timeout
         )
 
@@ -742,7 +744,7 @@ else:
             else:
                 render_page_header(st, eyebrow="Trang chủ › Moodle Courses", title="Khóa học Moodle", description="Quản lý và đồng bộ dữ liệu khóa học từ Moodle với DeepTutor.")
             st.markdown("<h2 class='lms-section-title'>Khóa học Moodle phụ trách</h2>", unsafe_allow_html=True)
-            moodle_courses = api_get("/moodle/courses", timeout=15)
+            moodle_courses = api_get("/moodle/courses", timeout=15, headers=MOODLE_DISCOVERY_HEADERS)
             if not moodle_courses["success"]:
                 render_error_state(st, "Không thể tải danh sách môn học Moodle. Vui lòng kiểm tra kết nối Moodle và thử lại.")
             elif not moodle_courses["data"]:
@@ -1162,7 +1164,11 @@ else:
             )
 
         if st.session_state.user_role == "teacher" and st.session_state.get("selected_moodle_course_id"):
-            resources_result = api_get(f"/moodle/courses/{st.session_state.selected_moodle_course_id}/resources", timeout=30)
+            resources_result = api_get(
+                f"/moodle/courses/{st.session_state.selected_moodle_course_id}/resources",
+                timeout=30,
+                headers=MOODLE_DISCOVERY_HEADERS,
+            )
             if workspace_tab in {"Tài liệu", "Đồng bộ DeepTutor"} and resources_result["success"]:
                 for resource in resources_result["data"]:
                     with st.container(border=True):
