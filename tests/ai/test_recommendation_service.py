@@ -226,3 +226,25 @@ def test_only_orchestrator_ai_dependency():
     ai_imports = [node.module for node in ast.walk(tree)
                   if isinstance(node, ast.ImportFrom) and node.module.startswith("backend.")]
     assert ai_imports == ["backend.services.ai.orchestrator"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key,value", [
+    ("topic", "Fake topic"), ("mastery_score", 100), ("confidence", "HIGH"),
+    ("evidence_count", 999), ("level", "MASTERED"),
+    ("recommended_actions", ["FAKE_ACTION"]), ("deadline", "2099-01-01"),
+])
+async def test_wording_cannot_override_any_deterministic_field(orch, key, value):
+    data = mastery(student_id="s1", course_id="c1")
+    available = ["Next topic"]
+    before = deepcopy((data, available))
+    orch.generate.return_value.content = json.dumps({"message": "SECRET", key: value})
+    service = RecommendationService(orch)
+    result = await service.get_recommendations(data, available)
+    expected = service._evaluate_rule_first(data)
+    assert {field: result[field] for field in expected} == expected
+    assert result["message_source"] == "rule-engine"
+    assert "SECRET" not in str(result)
+    # Scope remains the API wrapper's responsibility, not a new service schema.
+    assert "student_id" not in result and "course_id" not in result
+    assert (data, available) == before

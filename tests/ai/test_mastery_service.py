@@ -161,3 +161,12 @@ def test_no_llm_provider_or_persistence_dependency():
     assert all(isinstance(node, ast.ImportFrom) and node.module == "typing"
                for node in imports)
     assert not any(isinstance(node, ast.AsyncFunctionDef) for node in ast.walk(tree))
+
+
+@pytest.mark.parametrize("field", list(SCOPE))
+def test_mixed_scope_is_rejected_not_filtered_and_inputs_preserved(field):
+    evidence = [quiz(True), card("GOOD"), {**quiz(False), field: "other"}]
+    before = deepcopy(evidence)
+    with pytest.raises(ValueError, match="INVALID_MASTERY_INPUT"):
+        calculate(evidence)
+    assert evidence == before
