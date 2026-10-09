@@ -254,7 +254,8 @@ async def test_exact_count_and_prompt_contract(mock_orchestrator):
                         "correct_option_id", "explanation", "Do not invent citations"):
         assert instruction in call["system_prompt"]
     question = json.loads(mock_orchestrator.generate.return_value.content)["questions"][0]
-    mock_orchestrator.generate.return_value.content = json.dumps({"questions": [question] * 20})
+    mock_orchestrator.generate.return_value.content = json.dumps({"questions": [
+        {**question, "question": f"Distinct question {index}"} for index in range(20)]})
     result = await service.generate_grounded_quiz(**grounded_input(question_count=20))
     assert len(result["questions"]) == 20
 
@@ -318,3 +319,68 @@ async def test_provider_failure_is_safe(mock_orchestrator, raises):
             content="secret provider details", error_code="private error")
     with pytest.raises(ValueError, match="^QUIZ_GENERATION_FAILED$"):
         await QuizService(mock_orchestrator).generate_grounded_quiz(**grounded_input())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("variant", ["What is Python?", "  what   IS\npython? "])
+async def test_duplicate_questions_rejected(mock_orchestrator, variant):
+    question = json.loads(mock_orchestrator.generate.return_value.content)["questions"][0]
+    question["question"] = "What is Python?"
+    mock_orchestrator.generate.return_value.content = json.dumps({"questions": [question, {**question, "question": variant}]})
+    with pytest.raises(ValueError, match="^INVALID_QUIZ_SCHEMA") as error:
+        await QuizService(mock_orchestrator).generate_grounded_quiz(**grounded_input(question_count=2))
+    assert variant not in str(error.value)
+    mock_orchestrator.generate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("variant", ["First option", "  FIRST\t option "])
+async def test_duplicate_option_text_rejected(mock_orchestrator, variant):
+    data = json.loads(mock_orchestrator.generate.return_value.content)
+    data["questions"][0]["options"] = [{"id": "A", "text": "First option"}, {"id": "B", "text": variant}]
+    mock_orchestrator.generate.return_value.content = json.dumps(data)
+    with pytest.raises(ValueError, match="^INVALID_QUIZ_SCHEMA"):
+        await QuizService(mock_orchestrator).generate_grounded_quiz(**grounded_input())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("bad", [None, {"content": "SECRET"}, object()])
+async def test_malformed_result_is_generation_failure(mock_orchestrator, legacy, bad):
+    mock_orchestrator.generate.return_value = bad
+    with pytest.raises(ValueError) as error:
+        if legacy:
+            await QuizService(mock_orchestrator).generate_quiz("Quiz")
+        else:
+            await QuizService(mock_orchestrator).generate_grounded_quiz(**grounded_input())
+    assert str(error.value) == "QUIZ_GENERATION_FAILED"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("metadata", ["SECRET", 1, [None], ["SECRET"]])
+async def test_invalid_sources_rejected_before_provider(mock_orchestrator, legacy, metadata):
+    with pytest.raises(ValueError, match="^INVALID_QUIZ_REQUEST") as error:
+        if legacy:
+            await QuizService(mock_orchestrator).generate_quiz("Quiz", source_metadata=metadata)
+        else:
+            await QuizService(mock_orchestrator).generate_grounded_quiz(**grounded_input(), source_metadata=metadata)
+    assert "SECRET" not in str(error.value)
+    mock_orchestrator.generate.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata", [{"source_id": "trusted", "nested": {"page": 1}},
+                                      [{"source_id": "trusted", "nested": {"page": 1}}]])
+async def test_sources_snapshot_before_provider_and_public_safe(mock_orchestrator, metadata):
+    original = deepcopy(metadata)
+    content = mock_orchestrator.generate.return_value
+    async def generate(**kwargs):
+        source = metadata if isinstance(metadata, dict) else metadata[0]
+        source["nested"]["page"] = 99
+        return content
+    mock_orchestrator.generate.side_effect = generate
+    service = QuizService(mock_orchestrator)
+    result = await service.generate_grounded_quiz(**grounded_input(), source_metadata=metadata, client_facing=False)
+    assert result["questions"][0]["source_metadata"] == original
+    assert "source_metadata" not in service.to_public_result(result)["questions"][0]

@@ -177,8 +177,18 @@ def test_service_has_no_grading_or_provider_dependencies():
 
     tree = ast.parse(inspect.getsource(module))
     imports = [node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
-    assert [name for name in imports if name.startswith("backend.")] == ["backend.services.ai.orchestrator"]
+    assert [name for name in imports if name.startswith("backend.")] == [
+        "backend.services.ai.orchestrator", "backend.services.ai.provider_base"]
     generation_calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
                         and isinstance(node.func, ast.Attribute) and node.func.attr == "generate"]
     assert len(generation_calls) == 1
     assert ast.unparse(generation_calls[0].func) == "self.orchestrator.generate"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", [None, {"content": "SECRET"}, object()])
+async def test_malformed_result_is_safe_generation_failure(mock_orchestrator, bad):
+    mock_orchestrator.generate.return_value = bad
+    with pytest.raises(ValueError) as error:
+        await ExplanationService(mock_orchestrator).generate_explanation(**valid_input())
+    assert str(error.value) == "EXPLANATION_GENERATION_FAILED"
