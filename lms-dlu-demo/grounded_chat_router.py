@@ -2,15 +2,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict
+import json
 from pathlib import Path
 import re
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from backend.services.ai.grounded_chat import (
     GroundedChatRequest,
+    GroundedChatResponse,
     GroundedChatService,
     RetrievedContextItem,
 )
@@ -24,6 +26,42 @@ class GroundedChatInput(BaseModel):
     question: str = Field(min_length=1, max_length=8000)
     course_id: str = Field(min_length=1, max_length=120)
     kb_name: str | None = Field(default=None, min_length=1, max_length=120)
+
+    @field_validator("question", "course_id", "kb_name")
+    @classmethod
+    def strip_nonblank(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("Value must not be blank.")
+        return value
+
+
+def validate_retrieval(envelope: Any, course_id: str) -> Mapping[str, Any]:
+    """Validate the public envelope and explicit scope, without resolving KBs.
+
+    Absent source identities remain an upstream ownership guarantee.
+    """
+    if not isinstance(envelope, Mapping):
+        raise ValueError("invalid retrieval")
+    returned_course, kb_id = envelope.get("course_id"), envelope.get("kb_id")
+    result = envelope.get("result")
+    if (not isinstance(returned_course, str) or not returned_course.strip()
+            or returned_course != course_id or not isinstance(kb_id, str)
+            or not kb_id.strip() or not isinstance(result, Mapping)):
+        raise ValueError("invalid retrieval")
+    if "sources" in result and not isinstance(result["sources"], list):
+        raise ValueError("invalid retrieval")
+    for source in result.get("sources", []):
+        if not isinstance(source, Mapping):
+            continue
+        metadata = source.get("metadata")
+        for identity in (source, metadata if isinstance(metadata, Mapping) else {}):
+            for key, expected in (("course_id", course_id), ("kb_id", kb_id), ("kb_name", kb_id)):
+                if key in identity and identity[key] != expected:
+                    raise ValueError("invalid source scope")
+    return result
 
 
 def retrieved_contexts(result: Mapping[str, Any], ledger: MoodleIngestionLedger | None = None, course_id: str = "") -> list[RetrievedContextItem]:
@@ -88,21 +126,46 @@ def create_grounded_chat_router(
             )
         except DeepTutorError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.as_dict()) from exc
+        except Exception:
+            raise HTTPException(502, detail={
+                "code": "retrieval_failure", "message": "Retrieval could not be completed.",
+            }) from None
+
+        try:
+            result = validate_retrieval(query_result, request.course_id)
+            contexts = retrieved_contexts(result, ledger, request.course_id)
+        except Exception:
+            raise HTTPException(502, detail={
+                "code": "invalid_retrieval_response", "message": "Retrieval returned an invalid response.",
+            }) from None
 
         try:
             response = await grounded_chat_service.chat(
                 GroundedChatRequest(
                     query=request.question,
-                    contexts=retrieved_contexts(query_result["result"], ledger, request.course_id),
+                    contexts=contexts,
                     course_id=query_result["course_id"],
                     kb_name=query_result["kb_id"],
                 )
             )
+            if not isinstance(response, GroundedChatResponse):
+                raise ValueError("invalid chat response")
+            if (response.status not in ("success", "error") or not isinstance(response.answer, str)
+                    or response.course_id != request.course_id or response.kb_name != query_result["kb_id"]
+                    or not isinstance(response.sources, list)
+                    or not all(isinstance(source, dict) for source in response.sources)
+                    or not isinstance(response.ai, dict)
+                    or not isinstance(response.ai.get("provider"), str)
+                    or not isinstance(response.ai.get("model"), str)
+                    or type(response.ai.get("fallback_used")) is not bool):
+                raise ValueError("invalid chat response")
+            payload = asdict(response)
+            json.dumps(payload, allow_nan=False)
         except Exception as exc:
             raise HTTPException(
                 status_code=502,
                 detail={"code": "ai_provider_failure", "message": "AI provider could not generate a response."},
-            ) from exc
-        return asdict(response)
+            ) from None
+        return payload
 
     return router
