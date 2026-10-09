@@ -88,17 +88,14 @@ async def test_each_deeptutor_write_fails_closed_without_an_injected_authorizer(
 
 
 @pytest.mark.asyncio
-async def test_deeptutor_read_routes_and_query_remain_unprotected():
+async def test_deeptutor_health_and_status_remain_unprotected():
     app, service = write_app()
     service.health.return_value = {"available": True}
     service.status.return_value = {"knowledge_bases": []}
-    service.query.return_value = {"answer": "grounded"}
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         health = await client.get("/deeptutor/health")
         status = await client.get("/deeptutor/status")
-        query = await client.post("/deeptutor/query", json={"course_id": "INT1339", "question": "What is Python?"})
 
     assert health.status_code == 200
     assert status.status_code == 200
-    assert query.status_code == 200
