@@ -1,4 +1,5 @@
 import time
+from collections.abc import Mapping
 from typing import Any, Dict, Optional
 
 import httpx
@@ -23,14 +24,22 @@ class OllamaProvider(LLMProvider):
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
         # Runtime sampling settings belong in Ollama's options object.
-        options = dict(kwargs.pop("options", {}) or {})
-        for key in ("temperature", "top_p", "seed"):
-            if key in kwargs:
-                options[key] = kwargs.pop(key)
-        if "max_tokens" in kwargs:
-            options["num_predict"] = kwargs.pop("max_tokens")
-        payload = {**kwargs, "options": options, "model": self.model,
-                   "messages": messages, "stream": False}
+        try:
+            supplied_options = kwargs.pop("options", {})
+            if not isinstance(supplied_options, Mapping):
+                raise ValueError("invalid options")
+            options = dict(supplied_options)
+            for key in ("temperature", "top_p", "seed"):
+                if key in kwargs:
+                    options[key] = kwargs.pop(key)
+            if "max_tokens" in kwargs:
+                options["num_predict"] = kwargs.pop("max_tokens")
+            payload = {**kwargs, "options": options, "model": self.model,
+                       "messages": messages, "stream": False}
+        except Exception:
+            return LLMResult("error", self.provider, self.model, "",
+                             (time.monotonic() - start) * 1000,
+                             error_code="INVALID_REQUEST")
         code = "UNKNOWN_ERROR"
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
