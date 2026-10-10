@@ -2,6 +2,7 @@ import os
 import requests
 from dotenv import load_dotenv
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from deeptutor_integration.contracts import SourceDocument
 
@@ -17,6 +18,55 @@ class MoodleAdapter:
 
         self.rest_endpoint = f"{self.base_url.rstrip('/')}/webservice/rest/server.php"
 
+    def _download_file(self, fileurl: str, resource_id: int):
+        """Download a Moodle resource without exposing credential-bearing URLs."""
+        try:
+            source = urlsplit(self.base_url)
+            target = urlsplit(fileurl)
+            source_port = source.port or (443 if source.scheme == "https" else 80)
+            target_port = target.port or (443 if target.scheme == "https" else 80)
+        except (TypeError, ValueError):
+            raise RuntimeError("Đường dẫn tải file Moodle không hợp lệ.") from None
+
+        if (
+            source.scheme not in {"http", "https"}
+            or target.scheme not in {"http", "https"}
+            or not source.hostname
+            or not target.hostname
+            or target.username
+            or target.password
+            or target.query
+            or target.fragment
+            or (source.scheme.lower(), source.hostname.lower(), source_port)
+            != (target.scheme.lower(), target.hostname.lower(), target_port)
+        ):
+            raise RuntimeError("Đường dẫn tải file Moodle không hợp lệ.")
+
+        try:
+            response = requests.get(
+                fileurl,
+                params={"token": self.token},
+                timeout=30,
+                allow_redirects=False,
+            )
+        except requests.RequestException:
+            raise RuntimeError(
+                f"Lỗi HTTP khi tải file từ Moodle (resource_id={resource_id})."
+            ) from None
+
+        status_code = getattr(response, "status_code", None)
+        if isinstance(status_code, int) and 300 <= status_code < 400:
+            raise RuntimeError(
+                f"Lỗi HTTP khi tải file từ Moodle (resource_id={resource_id}, status={status_code})."
+            )
+        try:
+            response.raise_for_status()
+        except requests.RequestException:
+            raise RuntimeError(
+                f"Lỗi HTTP khi tải file từ Moodle (resource_id={resource_id})."
+            ) from None
+        return response
+
     def _call_ws(self, function_name, **kwargs):
         """Hàm dùng chung để gọi Moodle Web Service với timeout và bắt lỗi HTTP/JSON."""
         params = {
@@ -26,15 +76,21 @@ class MoodleAdapter:
         }
         params.update(kwargs)
 
+        request_failed = False
         try:
             response = requests.get(self.rest_endpoint, params=params, timeout=15)
             response.raise_for_status()
-        except requests.RequestException as e:
-            raise RuntimeError("Lỗi HTTP khi gọi Moodle Web Service.") from e
+        except requests.RequestException:
+            request_failed = True
+        if request_failed:
+            raise RuntimeError("Lỗi HTTP khi gọi Moodle Web Service.")
 
+        response_invalid = False
         try:
             data = response.json()
         except ValueError:
+            response_invalid = True
+        if response_invalid:
             raise RuntimeError("Định dạng dữ liệu trả về từ Moodle không hợp lệ (không phải JSON).")
 
         if isinstance(data, dict) and ("exception" in data or "errorcode" in data):
@@ -126,11 +182,7 @@ class MoodleAdapter:
         if not fileurl:
             raise RuntimeError("Không tìm thấy đường dẫn tải file (fileurl) trong dữ liệu Moodle")
 
-        try:
-            file_response = requests.get(fileurl, params={"token": self.token}, timeout=30)
-            file_response.raise_for_status()
-        except requests.RequestException as e:
-            raise RuntimeError("Lỗi HTTP khi tải file từ Moodle.") from e
+        file_response = self._download_file(fileurl, resource_id)
 
         content = file_response.content
 
