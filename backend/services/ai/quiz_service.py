@@ -3,6 +3,7 @@ from copy import deepcopy
 from typing import Any, Dict, List, Optional
 
 from backend.services.ai.orchestrator import AIOrchestrator
+from backend.services.ai.provider_base import LLMResult
 
 
 class QuizService:
@@ -11,11 +12,23 @@ class QuizService:
             raise ValueError("QuizService yêu cầu AIOrchestrator.")
         self.orchestrator = orchestrator
 
+    @staticmethod
+    def _copy_sources(source_metadata: Any) -> Any:
+        if source_metadata is None:
+            return None
+        if isinstance(source_metadata, dict) or (
+            isinstance(source_metadata, list)
+            and all(isinstance(source, dict) for source in source_metadata)
+        ):
+            return deepcopy(source_metadata)
+        raise ValueError("INVALID_QUIZ_REQUEST: invalid source_metadata")
+
     def validate_and_parse_quiz(
         self, raw_content: Any, question_count: Optional[int] = None,
         source_metadata: Any = None,
     ) -> Dict[str, Any]:
         """Parse and validate internal MCQs; only caller sources are retained."""
+        source_metadata = self._copy_sources(source_metadata)
         try:
             if isinstance(raw_content, dict):
                 data = raw_content
@@ -38,18 +51,24 @@ class QuizService:
             raise ValueError("INVALID_QUIZ_SCHEMA: questions must be non-empty")
 
         validated_questions = []
+        question_texts = set()
         for question in questions:
             if not isinstance(question, dict):
                 raise ValueError("INVALID_QUIZ_SCHEMA: invalid question")
             text = question.get("question", question.get("question_text"))
             if not isinstance(text, str) or not text.strip():
                 raise ValueError("INVALID_QUIZ_SCHEMA: blank question")
+            normalized_text = " ".join(text.casefold().split())
+            if normalized_text in question_texts:
+                raise ValueError("INVALID_QUIZ_SCHEMA: duplicate question")
+            question_texts.add(normalized_text)
             if question.get("type") != "mcq":
                 raise ValueError("INVALID_QUIZ_SCHEMA: only mcq is supported")
             options = question.get("options")
             if not isinstance(options, list):
                 raise ValueError("INVALID_QUIZ_SCHEMA: invalid options")
             normalized_options = []
+            option_texts = set()
             for option in options:
                 if not isinstance(option, dict):
                     raise ValueError("INVALID_QUIZ_SCHEMA: invalid option")
@@ -58,6 +77,10 @@ class QuizService:
                     raise ValueError("INVALID_QUIZ_SCHEMA: blank option id")
                 if not isinstance(option_text, str) or not option_text.strip():
                     raise ValueError("INVALID_QUIZ_SCHEMA: blank option text")
+                normalized_option_text = " ".join(option_text.casefold().split())
+                if normalized_option_text in option_texts:
+                    raise ValueError("INVALID_QUIZ_SCHEMA: duplicate option text")
+                option_texts.add(normalized_option_text)
                 normalized_options.append({"id": option_id.strip(), "text": option_text.strip()})
             correct_id = question.get("correct_option_id", question.get("correct_answer"))
             explanation = question.get("explanation")
@@ -104,6 +127,7 @@ class QuizService:
         source_metadata: Any = None, client_facing: bool = True, **kwargs: Any,
     ) -> Dict[str, Any]:
         """Generate from caller retrieval only; opt into internal keys explicitly."""
+        source_metadata = self._copy_sources(source_metadata)
         if not isinstance(retrieved_context, str) or not retrieved_context.strip():
             raise ValueError("INSUFFICIENT_GROUNDED_CONTEXT")
         if type(question_count) is not int or not 1 <= question_count <= 20:
@@ -137,7 +161,7 @@ class QuizService:
             )
         except Exception:
             raise ValueError("QUIZ_GENERATION_FAILED") from None
-        if result.status != "success":
+        if not isinstance(result, LLMResult) or result.status != "success":
             raise ValueError("QUIZ_GENERATION_FAILED")
         internal = self.validate_and_parse_quiz(result.content, question_count, source_metadata)
         return self.to_public_result(internal) if client_facing else internal
@@ -152,7 +176,7 @@ class QuizService:
         Public output is the default; False explicitly requests internal keys.
         """
         question_count = kwargs.pop("question_count", 1)
-        source_metadata = kwargs.pop("source_metadata", None)
+        source_metadata = self._copy_sources(kwargs.pop("source_metadata", None))
         topic = kwargs.pop("topic", "General")
         difficulty = kwargs.pop("difficulty", "medium")
         question_types = kwargs.pop("question_types", ["mcq"])
@@ -187,7 +211,7 @@ class QuizService:
             )
         except Exception:
             raise ValueError("QUIZ_GENERATION_FAILED") from None
-        if result.status != "success":
+        if not isinstance(result, LLMResult) or result.status != "success":
             raise ValueError("QUIZ_GENERATION_FAILED")
         internal = self.validate_and_parse_quiz(result.content, question_count, source_metadata)
         return self.to_public_result(internal) if client_facing else internal

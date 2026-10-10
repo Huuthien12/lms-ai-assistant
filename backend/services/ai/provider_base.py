@@ -39,7 +39,7 @@ def safe_result(result: LLMResult) -> LLMResult:
         return result
     code = result.error_code
     known = {"TIMEOUT_OR_NETWORK_ERROR", "RATE_LIMIT", "SERVICE_UNAVAILABLE",
-             "UNKNOWN_ERROR", "INVALID_RESPONSE", "MAX_RETRIES_EXCEEDED"}
+             "UNKNOWN_ERROR", "INVALID_RESPONSE", "INVALID_REQUEST", "MAX_RETRIES_EXCEEDED"}
     http_code = (isinstance(code, str) and len(code) == 8
                  and code.startswith("HTTP_") and code[5:].isdigit())
     return replace(result, content="", error_code=code if http_code or (

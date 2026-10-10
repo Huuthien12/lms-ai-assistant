@@ -147,7 +147,8 @@ async def test_count_mismatch_and_upper_bound(mock_orchestrator):
     with pytest.raises(ValueError, match="^INVALID_FLASHCARD_SCHEMA$"):
         await service.generate_grounded_flashcards(**grounded_input(count=2))
     card = json.loads(mock_orchestrator.generate.return_value.content)["flashcards"][0]
-    mock_orchestrator.generate.return_value.content = json.dumps({"flashcards": [card] * 50})
+    mock_orchestrator.generate.return_value.content = json.dumps({"flashcards": [
+        {**card, "front_text": f"Distinct front {index}"} for index in range(50)]})
     assert len((await service.generate_grounded_flashcards(**grounded_input(count=50)))["flashcards"]) == 50
 
 
@@ -281,8 +282,45 @@ def test_service_generation_only_through_orchestrator():
 
     tree = ast.parse(inspect.getsource(module))
     imports = [node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
-    assert [name for name in imports if name.startswith("backend.")] == ["backend.services.ai.orchestrator"]
+    assert [name for name in imports if name.startswith("backend.")] == [
+        "backend.services.ai.orchestrator", "backend.services.ai.provider_base"]
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
              and isinstance(node.func, ast.Attribute) and node.func.attr == "generate"]
     assert len(calls) == 1
     assert ast.unparse(calls[0].func) == "self.orchestrator.generate"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("front,back", [("Front", "Back"), ("  FRONT\t ", " back  ")])
+async def test_duplicate_card_pairs_rejected(mock_orchestrator, front, back):
+    card = json.loads(mock_orchestrator.generate.return_value.content)["flashcards"][0]
+    mock_orchestrator.generate.return_value.content = json.dumps({"flashcards": [
+        {**card, "front_text": "Front", "back_text": "Back"},
+        {**card, "front_text": front, "back_text": back}]})
+    with pytest.raises(ValueError, match="^INVALID_FLASHCARD_SCHEMA$"):
+        await FlashcardService(mock_orchestrator).generate_grounded_flashcards(**grounded_input(count=2))
+    mock_orchestrator.generate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("front,back", [("Front", "Other back"), ("Other front", "Back")])
+async def test_shared_front_or_back_with_distinct_pair_accepted(mock_orchestrator, front, back):
+    card = json.loads(mock_orchestrator.generate.return_value.content)["flashcards"][0]
+    mock_orchestrator.generate.return_value.content = json.dumps({"flashcards": [
+        {**card, "front_text": "Front", "back_text": "Back"},
+        {**card, "front_text": front, "back_text": back}]})
+    result = await FlashcardService(mock_orchestrator).generate_grounded_flashcards(**grounded_input(count=2))
+    assert len(result["flashcards"]) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("bad", [None, {"content": "SECRET"}, object()])
+async def test_malformed_result_is_safe_generation_failure(mock_orchestrator, legacy, bad):
+    mock_orchestrator.generate.return_value = bad
+    with pytest.raises(ValueError) as error:
+        if legacy:
+            await FlashcardService(mock_orchestrator).generate_flashcards("Cards")
+        else:
+            await FlashcardService(mock_orchestrator).generate_grounded_flashcards(**grounded_input())
+    assert str(error.value) == "FLASHCARD_GENERATION_FAILED"
