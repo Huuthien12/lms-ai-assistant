@@ -18,9 +18,13 @@ DeepSeek health checks configuration only, not live connectivity.
 `POST /chat/grounded` receives `question`, `course_id`, optional `kb_name`;
 strings are trimmed and blanks rejected. The route calls the public DeepTutor
 query contract and passes only retrieved source content to GroundedChatService.
-Returned course must match the request; envelope shape and explicit source
-course/KB identities are checked. Absent source identity cannot be independently
-proven by AI and remains an upstream guarantee.
+Returned course must match the request and returned KB must match the server-resolved
+course-to-KB mapping before AI use. Explicit caller KB names remain subject to
+DeepTutor's mapping check; they are not ownership proof. Envelope shape and
+explicit source course/KB identity conflicts fail closed. Missing per-source
+provenance identity remains an upstream dependency. Document provenance/lifecycle
+is not yet verified. These checks do not provide end-user authorization; Q5 remains
+blocked on verified identity and course access, and full Q6 provenance remains blocked.
 
 Response fields are `status`, `answer`, `course_id`, `kb_name`, `sources`, and
 `ai` (`provider`, `model`, `fallback_used`). Structured sources originate from

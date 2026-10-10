@@ -38,7 +38,7 @@ class GroundedChatInput(BaseModel):
         return value
 
 
-def validate_retrieval(envelope: Any, course_id: str) -> Mapping[str, Any]:
+def validate_retrieval(envelope: Any, course_id: str, expected_kb: str) -> Mapping[str, Any]:
     """Validate the public envelope and explicit scope, without resolving KBs.
 
     Absent source identities remain an upstream ownership guarantee.
@@ -49,7 +49,7 @@ def validate_retrieval(envelope: Any, course_id: str) -> Mapping[str, Any]:
     result = envelope.get("result")
     if (not isinstance(returned_course, str) or not returned_course.strip()
             or returned_course != course_id or not isinstance(kb_id, str)
-            or not kb_id.strip() or not isinstance(result, Mapping)):
+            or not kb_id.strip() or kb_id != expected_kb or not isinstance(result, Mapping)):
         raise ValueError("invalid retrieval")
     if "sources" in result and not isinstance(result["sources"], list):
         raise ValueError("invalid retrieval")
@@ -132,7 +132,7 @@ def create_grounded_chat_router(
             }) from None
 
         try:
-            result = validate_retrieval(query_result, request.course_id)
+            result = validate_retrieval(query_result, request.course_id, kb_name)
             contexts = retrieved_contexts(result, ledger, request.course_id)
         except Exception:
             raise HTTPException(502, detail={

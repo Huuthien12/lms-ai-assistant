@@ -355,3 +355,48 @@ def test_no_usable_context_does_not_call_provider(sources):
     assert response.status_code == 200
     assert response.json()["answer"] and response.json()["sources"] == []
     orch.generate.assert_not_awaited()
+
+
+def test_returned_kb_mismatch_rejected_before_provider():
+    backend = FakeDeepTutor({})
+    backend.query = MagicMock(return_value={
+        "course_id": "INT1339", "kb_id": "other-kb",
+        "result": {"sources": [{"content": "SECRET_WRONG_KB"}]},
+    })
+    orch = MagicMock()
+    orch.generate = AsyncMock()
+    response = client(backend, GroundedChatService(orch)).post(
+        "/chat/grounded", json={"question": "Question", "course_id": "INT1339"})
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == "invalid_retrieval_response"
+    assert "SECRET" not in response.text
+    orch.generate.assert_not_awaited()
+
+
+@pytest.mark.parametrize("explicit", [None, "int1339-python", "other-kb"])
+def test_expected_kb_uses_service_mapping_with_explicit_kb_behavior(explicit):
+    from deeptutor_integration.service import DeepTutorService
+
+    backend = FakeDeepTutor({"answer": "SECRET_GENERATED", "sources": [{
+        "content": "Trusted excerpt", "chunk_id": "trusted",
+    }]})
+    # Use the actual public resolver, not a caller-controlled fake KB selector.
+    backend.kb_name = MagicMock(side_effect=DeepTutorService.kb_name)
+    orch = MagicMock()
+    orch.generate = AsyncMock(return_value=LLMResult(
+        "success", "mock", "mock", "Grounded answer", 0))
+    response = client(backend, GroundedChatService(orch)).post(
+        "/chat/grounded", json={"question": "Question", "course_id": "INT1339", "kb_name": explicit})
+    if explicit == "other-kb":
+        assert response.status_code == 422
+        assert response.json()["detail"]["code"] == "kb_course_mismatch"
+        assert backend.query_calls == []
+        orch.generate.assert_not_awaited()
+    else:
+        assert response.status_code == 200
+        assert response.json()["kb_name"] == "int1339-python"
+        assert response.json()["sources"] == [{"source_id": "trusted"}]
+        assert backend.query_calls[0].kb_id == "int1339-python"
+        orch.generate.assert_awaited_once()
+        assert "Trusted excerpt" in orch.generate.call_args.kwargs["prompt"]
+        assert "SECRET_GENERATED" not in orch.generate.call_args.kwargs["prompt"]
