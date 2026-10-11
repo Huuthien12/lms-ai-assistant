@@ -190,4 +190,10 @@ class DeepTutorService:
         if not self._ready(info):
             raise DeepTutorError("kb_not_ready", "Knowledge base is not ready.", status_code=409)
         result = self.adapter.search(kb_id, request.question.strip())
+        if not isinstance(result, dict):
+            raise DeepTutorError("invalid_query_response", "Retrieval returned an invalid response.", status_code=502)
+        if result.get("needs_reindex"):
+            raise DeepTutorError("kb_not_ready", "Knowledge base requires indexing.", status_code=409)
+        if result.get("error_type") or result.get("error") or result.get("status") == "error":
+            raise DeepTutorError("retrieval_failure", "Retrieval could not be completed.", status_code=502)
         return {"course_id": request.course_id, "kb_id": kb_id, "result": result}

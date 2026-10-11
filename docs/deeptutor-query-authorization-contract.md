@@ -1,15 +1,46 @@
-# DeepTutor query authorization contract
+# Runtime query/chat authorization
 
-`POST /deeptutor/query` is fail-closed unless application composition injects a query-authorizer dependency into `create_router`. That dependency must establish a verified principal and return a callable which receives the parsed `QueryInput`. The callable must reject the actual `QueryInput.course_id` unless the principal has authoritative access to that course, before `DeepTutorService.query` runs. A valid service token by itself is not course authorization.
+Production injects `create_moodle_query_authorizer` into `/deeptutor/query` and
+one shared handler registered as `/chat/grounded` and `/lms/chat`. The LMS chat
+HTTP self-proxy is retired: authorization and retrieval run once per request.
 
-`DeepTutorService.kb_name` deterministically maps a canonical course identifier to one knowledge-base identifier. An explicit `kb_id` must equal that mapping; it is not a caller-controlled selector. Course identifiers must use lowercase/uppercase ASCII letters, digits, `_`, or `-` (normalised to lowercase), so distinct raw values cannot collapse onto one fallback KB name.
+## Credentials and configuration
 
-The CLI adapter's `search(kb_id, question)` response is opaque. Any source metadata it returns, including `course_id` or `kb_id`, is not proof of ownership and must not be used to grant access or to filter authorization decisions.
+Set `MOODLE_BASE_URL` to the configured Moodle instance. Each API caller supplies
+`Authorization: Bearer <personal Moodle web-service token>`. Moodle must enable
+`core_webservice_get_site_info` and `core_enrol_get_users_courses` for that token's
+service. The backend verifies credentials live and looks up active, accessible
+enrollments for the verified Moodle user ID. Tokens are sent in POST form data;
+authorization requests do not follow redirects. `MOODLE_TOKEN` and
+`LMS_MOODLE_DISCOVERY_TOKEN` remain ingestion/discovery credentials and grant no
+student query rights. Caller roles, student IDs and principal headers grant none.
 
-Required integration contracts:
+The existing Streamlit demo-password login does not supply a personal Moodle
+token. Its chat now fails closed until the separate verified-login flow forwards
+that credential. Do not replace it with a shared service token or disable guards.
 
-- Thọ/application composition: a FastAPI query dependency backed by verified identity, role, and authoritative course enrollment/access data. It must deny before retrieval and retain lecturer/admin boundaries.
-- Quân/DeepTutor adapter: if future source-level isolation is required, provide trusted, stable document and KB provenance tied to the immutable ingestion ledger. The current CLI search contract does not provide that guarantee.
-- LMS grounded-chat callers that invoke `DeepTutorService.query` directly must enforce the same verified course authorization at their own route boundary; the `/deeptutor/query` dependency cannot protect those calls.
+## Canonical scope and policy
 
-`GET /deeptutor/status` currently preserves its existing response contract and can expose every KB when called without `kb_id`. Minimum policy: application composition should protect the list form with a verified principal and restrict it to an operational/admin role; course-scoped callers should use a course-authorized status path rather than treating this list as an enrollment API. This phase does not alter that endpoint.
+The authoritative enrollment record supplies numeric Moodle course ID and
+shortname. The shortname is resolved by `DeepTutorService.kb_name`; explicit KBs
+must match. Ambiguous mappings fail closed. `CourseAuthorizationPolicy` from
+PR #34 validates the principal, Moodle binding, exact course/action and LIVE
+allow decision. Only then does the checker replace the query course/KB with the
+server-resolved values and permit `service.query`, `adapter.search` and the LLM.
+No authorization decisions or credentials are cached across requests.
+
+Missing/invalid credentials return 401; a verified user without course enrollment
+returns 403; missing configuration, unavailable auth dependencies or malformed
+authoritative responses return sanitized 503. Explicit KB mismatch remains 422.
+Retrieval error envelopes return 502; `needs_reindex` returns 409. A successful
+empty retrieval still yields the existing safe no-context response without LLM.
+
+## Remaining boundaries
+
+Full chunk provenance and ACTIVE document-version verification remain follow-ups;
+CLI metadata is not ownership evidence. `GET /deeptutor/status`, learning/history
+APIs and ingestion/write course authorization are outside this query/chat fix.
+The status inventory still requires an operational/admin boundary.
+
+Tests use the actual runtime adapter/policy with mocked Moodle transport and
+HTTP routes. They are not live Moodle, RAG, SQL or LLM E2E evidence.

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import asdict
 from pathlib import Path
 import re
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from backend.services.ai.grounded_chat import (
@@ -14,6 +15,7 @@ from backend.services.ai.grounded_chat import (
     GroundedChatService,
     RetrievedContextItem,
 )
+from deeptutor_integration.api import QueryAccessChecker, _query_auth_not_configured
 from deeptutor_integration.contracts import QueryInput
 from deeptutor_integration.errors import DeepTutorError
 from deeptutor_integration.service import DeepTutorService
@@ -69,23 +71,31 @@ def retrieved_contexts(result: Mapping[str, Any], ledger: MoodleIngestionLedger 
 def create_grounded_chat_router(
     deeptutor_service: DeepTutorService,
     grounded_chat_service: GroundedChatService | None,
+    query_authorizer: Callable[..., QueryAccessChecker] | None = None,
 ) -> APIRouter:
     router = APIRouter(tags=["grounded-chat"])
+    query_dependency = Depends(query_authorizer or _query_auth_not_configured)
     config = getattr(deeptutor_service, "config", None)
     ledger = MoodleIngestionLedger(config.runtime_dir) if config else None
 
+    @router.post("/lms/chat")
     @router.post("/chat/grounded")
-    async def grounded_chat(request: GroundedChatInput) -> dict[str, Any]:
+    async def grounded_chat(request: GroundedChatInput, authorize_query=query_dependency) -> dict[str, Any]:
+        query = QueryInput(course_id=request.course_id, question=request.question, kb_id=request.kb_name)
+        if not callable(authorize_query):
+            _query_auth_not_configured()
+        try:
+            await run_in_threadpool(authorize_query, query)
+        except DeepTutorError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.as_dict()) from None
         if grounded_chat_service is None:
             raise HTTPException(
                 status_code=503,
                 detail={"code": "ai_unavailable", "message": "AI provider is not configured."},
             )
         try:
-            kb_name = deeptutor_service.kb_name(request.course_id, request.kb_name)
-            query_result = deeptutor_service.query(
-                QueryInput(course_id=request.course_id, question=request.question, kb_id=kb_name)
-            )
+            query.kb_id = deeptutor_service.kb_name(query.course_id, query.kb_id)
+            query_result = deeptutor_service.query(query)
         except DeepTutorError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.as_dict()) from exc
 
@@ -93,7 +103,7 @@ def create_grounded_chat_router(
             response = await grounded_chat_service.chat(
                 GroundedChatRequest(
                     query=request.question,
-                    contexts=retrieved_contexts(query_result["result"], ledger, request.course_id),
+                    contexts=retrieved_contexts(query_result["result"], ledger, query.course_id),
                     course_id=query_result["course_id"],
                     kb_name=query_result["kb_id"],
                 )
