@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 import sys
 import os
+import traceback
 
 # Cho phép import MoodleAdapter từ thư mục lms-dlu-demo
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'lms-dlu-demo')))
@@ -32,6 +33,67 @@ class TestMoodleAdapter(unittest.TestCase):
         self.assertEqual(params["wsfunction"], "core_course_get_enrolled_courses_by_timeline_classification")
         self.assertEqual(params["classification"], "all")
         self.assertNotIn("options[ids][0]", params)
+
+    @patch("moodle_adapter.requests.get")
+    def test_rest_success_response_preserves_contract(self, mock_get):
+        response = MagicMock()
+        response.json.return_value = {"courses": []}
+        mock_get.return_value = response
+
+        self.assertEqual(self.adapter._call_ws("core_course_get_enrolled_courses_by_timeline_classification"), {"courses": []})
+        self.assertEqual(mock_get.call_args.kwargs["timeout"], 15)
+        self.assertEqual(mock_get.call_args.kwargs["params"]["wstoken"], self.fake_token)
+
+    @patch("moodle_adapter.requests.get")
+    def test_rest_transport_failure_is_redacted_from_exception_context_and_traceback(self, mock_get):
+        import requests
+        unsafe_url = f"https://fake-moodle.edu.vn/rest?wstoken={self.fake_token}"
+        mock_get.side_effect = requests.exceptions.Timeout(unsafe_url)
+
+        with self.assertRaisesRegex(RuntimeError, "Lỗi HTTP khi gọi Moodle Web Service") as raised:
+            self.adapter._call_ws("core_course_get_enrolled_courses_by_timeline_classification")
+
+        formatted = "".join(traceback.format_exception(raised.exception))
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+        self.assertNotIn(self.fake_token, formatted)
+        self.assertNotIn("wstoken=", formatted)
+        self.assertNotIn(unsafe_url, formatted)
+
+    @patch("moodle_adapter.requests.get")
+    def test_rest_http_failure_is_redacted_from_traceback(self, mock_get):
+        import requests
+        unsafe_url = f"https://fake-moodle.edu.vn/rest?wstoken={self.fake_token}"
+        response = MagicMock()
+        response.raise_for_status.side_effect = requests.exceptions.HTTPError(unsafe_url)
+        mock_get.return_value = response
+
+        with self.assertRaisesRegex(RuntimeError, "Lỗi HTTP khi gọi Moodle Web Service") as raised:
+            self.adapter._call_ws("core_course_get_enrolled_courses_by_timeline_classification")
+
+        formatted = "".join(traceback.format_exception(raised.exception))
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+        self.assertNotIn(self.fake_token, formatted)
+        self.assertNotIn("wstoken=", formatted)
+        self.assertNotIn(unsafe_url, formatted)
+
+    @patch("moodle_adapter.requests.get")
+    def test_malformed_rest_response_is_redacted_from_traceback(self, mock_get):
+        unsafe_url = f"https://fake-moodle.edu.vn/rest?wstoken={self.fake_token}"
+        response = MagicMock()
+        response.json.side_effect = ValueError(unsafe_url)
+        mock_get.return_value = response
+
+        with self.assertRaisesRegex(RuntimeError, "không phải JSON") as raised:
+            self.adapter._call_ws("core_course_get_enrolled_courses_by_timeline_classification")
+
+        formatted = "".join(traceback.format_exception(raised.exception))
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+        self.assertNotIn(self.fake_token, formatted)
+        self.assertNotIn("wstoken=", formatted)
+        self.assertNotIn(unsafe_url, formatted)
 
     @patch("moodle_adapter.requests.get")
     def test_selected_course_must_be_enrolled(self, mock_get):
@@ -104,6 +166,7 @@ class TestMoodleAdapter(unittest.TestCase):
         self.assertEqual(source.content, b"%PDF-1.4 FAKE PDF CONTENT")
         self.assertEqual(mock_get.call_args_list[2].kwargs["params"], {"token": self.fake_token})
         self.assertEqual(mock_get.call_args_list[2].kwargs["timeout"], 30)
+        self.assertFalse(mock_get.call_args_list[2].kwargs["allow_redirects"])
 
         # 4 & 5. Không lộ token và không lưu URL/path
         doc_str = str(source.model_dump())
@@ -167,17 +230,23 @@ class TestMoodleAdapter(unittest.TestCase):
 
         resource_resp = MagicMock()
         resource_resp.json.return_value = {
-            "resources": [{"id": 1, "contentfiles": [{"fileurl": "https://fake.com/file"}]}]
+            "resources": [{"id": 1, "contentfiles": [{"fileurl": "https://fake-moodle.edu.vn/file"}]}]
         }
 
         pdf_resp = MagicMock()
-        pdf_resp.raise_for_status.side_effect = requests.exceptions.HTTPError("404 Not Found")
+        pdf_resp.raise_for_status.side_effect = requests.exceptions.HTTPError(
+            f"https://fake-moodle.edu.vn/file?token={self.fake_token}"
+        )
 
         mock_get.side_effect = [course_resp, resource_resp, pdf_resp]
 
         with self.assertRaises(RuntimeError) as context:
             self.adapter.get_normalized_document(9, 1)
         self.assertIn("Lỗi HTTP khi tải file", str(context.exception))
+        self.assertIsNone(context.exception.__cause__)
+        self.assertNotIn(self.fake_token, str(context.exception))
+        self.assertNotIn("token=", str(context.exception))
+        self.assertNotIn("file?", str(context.exception))
 
     @patch("moodle_adapter.requests.get")
     def test_rejects_non_pdf_download(self, mock_get):
@@ -185,7 +254,7 @@ class TestMoodleAdapter(unittest.TestCase):
         course_resp.json.return_value = self.enrolled_courses({"id": 9, "shortname": "INT1339"})
         resource_resp = MagicMock()
         resource_resp.json.return_value = {"resources": [{"id": 1, "contentfiles": [{
-            "filename": "chapter.pdf", "mimetype": "application/pdf", "fileurl": "https://fake.com/file"
+            "filename": "chapter.pdf", "mimetype": "application/pdf", "fileurl": "https://fake-moodle.edu.vn/file"
         }]}]}
         downloaded = MagicMock()
         downloaded.content = b"<html>login</html>"
@@ -204,13 +273,92 @@ class TestMoodleAdapter(unittest.TestCase):
         ):
             course = MagicMock(); course.json.return_value = self.enrolled_courses({"id": 9, "shortname": "INT1339"})
             resources = MagicMock(); resources.json.return_value = {"resources": [{"id": 1, "contentfiles": [{
-                "filename": filename, "mimetype": mime_type, "fileurl": "https://private"
+                "filename": filename, "mimetype": mime_type, "fileurl": "https://fake-moodle.edu.vn/file"
             }]}]}
             downloaded = MagicMock(); downloaded.content = content; downloaded.headers = {"Content-Type": mime_type}
             mock_get.side_effect = [course, resources, downloaded]
             retrieved = self.adapter.get_source_document(9, 1)
             self.assertEqual((retrieved.filename, retrieved.mime_type, retrieved.content), (filename, mime_type, content))
             mock_get.reset_mock()
+
+    def _source_responses(self, fileurl):
+        course = MagicMock()
+        course.json.return_value = self.enrolled_courses({"id": 9, "shortname": "INT1339"})
+        resources = MagicMock()
+        resources.json.return_value = {"resources": [{"id": 1, "contentfiles": [{
+            "filename": "chapter.pdf", "mimetype": "application/pdf", "fileurl": fileurl,
+        }]}]}
+        return course, resources
+
+    @patch("moodle_adapter.requests.get")
+    def test_rejects_untrusted_file_urls_before_network_request(self, mock_get):
+        invalid_urls = (
+            "https://other.example/file.pdf",
+            "https://user:password@fake-moodle.edu.vn/file.pdf",
+            "ftp://fake-moodle.edu.vn/file.pdf",
+            "https://fake-moodle.edu.vn:invalid/file.pdf",
+            "not a URL",
+        )
+        for fileurl in invalid_urls:
+            with self.subTest(fileurl=fileurl):
+                course, resources = self._source_responses(fileurl)
+                mock_get.side_effect = [course, resources]
+                with self.assertRaisesRegex(RuntimeError, "không hợp lệ") as raised:
+                    self.adapter.get_source_document(9, 1)
+                self.assertNotIn(self.fake_token, str(raised.exception))
+                self.assertNotIn(fileurl, str(raised.exception))
+                self.assertEqual(mock_get.call_count, 2)
+                mock_get.reset_mock()
+
+    @patch("moodle_adapter.requests.get")
+    def test_rejects_redirects_without_following_or_leaking_location(self, mock_get):
+        for location in ("https://fake-moodle.edu.vn/next", "https://other.example/next"):
+            with self.subTest(location=location):
+                course, resources = self._source_responses("https://fake-moodle.edu.vn/file.pdf")
+                redirect = MagicMock(status_code=302, headers={"Location": location})
+                mock_get.side_effect = [course, resources, redirect]
+                with self.assertRaisesRegex(RuntimeError, "status=302") as raised:
+                    self.adapter.get_source_document(9, 1)
+                self.assertNotIn(location, str(raised.exception))
+                self.assertNotIn(self.fake_token, str(raised.exception))
+                self.assertEqual(mock_get.call_count, 3)
+                self.assertFalse(mock_get.call_args.kwargs["allow_redirects"])
+                mock_get.reset_mock()
+
+    @patch("moodle_adapter.requests.get")
+    def test_download_transport_failures_are_redacted_and_unchained(self, mock_get):
+        import requests
+        unsafe_error = requests.exceptions.Timeout(
+            f"https://fake-moodle.edu.vn/file.pdf?token={self.fake_token}"
+        )
+        course, resources = self._source_responses("https://fake-moodle.edu.vn/file.pdf")
+        mock_get.side_effect = [course, resources, unsafe_error]
+
+        with self.assertRaisesRegex(RuntimeError, "resource_id=1") as raised:
+            self.adapter.get_source_document(9, 1)
+
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertNotIn(self.fake_token, str(raised.exception))
+        self.assertNotIn("token=", str(raised.exception))
+        self.assertNotIn("file.pdf", str(raised.exception))
+
+    @patch("moodle_adapter.requests.get")
+    def test_rejects_empty_html_and_invalid_pdf_payloads(self, mock_get):
+        cases = (
+            (b"", "application/pdf"),
+            (b"<html>login</html>", "text/html"),
+            (b"not a PDF", "application/pdf"),
+        )
+        for content, content_type in cases:
+            with self.subTest(content=content):
+                course, resources = self._source_responses("https://fake-moodle.edu.vn/file.pdf")
+                response = MagicMock(status_code=200, content=content, headers={"Content-Type": content_type})
+                mock_get.side_effect = [course, resources, response]
+                with self.assertRaisesRegex(RuntimeError, "không hợp lệ") as raised:
+                    self.adapter.get_source_document(9, 1)
+                self.assertNotIn(self.fake_token, str(raised.exception))
+                self.assertNotIn("file.pdf", str(raised.exception))
+                mock_get.reset_mock()
 
 
 if __name__ == "__main__":
