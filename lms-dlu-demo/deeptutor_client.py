@@ -25,9 +25,34 @@ class MockDeepTutorClient:
 
 
 class RealDeepTutorClient:
-    def __init__(self, base_url: str, service_token: str | None = None):
+    def __init__(self, base_url: str, service_token: str | None = None, personal_token: str | None = None):
         self.base_url = base_url.rstrip("/")
+        self._personal_token = personal_token
         self.service_token = service_token if service_token is not None else os.getenv("LMS_MOODLE_DISCOVERY_TOKEN")
+
+    def request(self, method: str, path: str, payload=None) -> dict[str, Any]:
+        from urllib.parse import urlsplit
+        try:
+            origin=urlsplit(self.base_url)
+            origin.port
+        except ValueError:
+            raise BackendRequestError(503) from None
+        if (not self._personal_token or origin.scheme not in {"http","https"} or not origin.hostname
+            or origin.username or origin.password or origin.query or origin.fragment
+            or not path.startswith("/") or path.startswith("//")):
+            raise BackendRequestError(401 if not self._personal_token else 503)
+        try:
+            response=httpx.request(method,self.base_url+path,json=payload,
+                headers={"Authorization":"Bearer "+self._personal_token},timeout=180,follow_redirects=False)
+            if response.status_code!=200:
+                raise BackendRequestError(response.status_code if response.status_code in (401,403,404,409,422,502,503) else 503)
+            result=response.json()
+            if not isinstance(result,dict): raise BackendRequestError(502)
+            return result
+        except BackendRequestError: raise
+        except (httpx.HTTPError,ValueError): raise BackendRequestError(503) from None
+
+    def identity(self): return self.request("GET","/auth/me")
 
     def ingest_resource(self, course_id_moodle: int, resource_id: int, kb_name: str | None = None) -> dict[str, Any]:
         headers = {"X-Internal-Api-Key": self.service_token} if self.service_token else None
@@ -47,7 +72,8 @@ class RealDeepTutorClient:
         return data
 
     def chat(self, question: str, course_id: str, kb_name: str | None = None) -> dict[str, Any]:
-        response = httpx.post(f"{self.base_url}/chat/grounded", json={"question": question, "course_id": course_id, "kb_name": kb_name}, timeout=120)
+        response = httpx.post(f"{self.base_url}/chat/grounded", json={"question": question, "course_id": course_id, "kb_name": kb_name},
+                              headers={"Authorization":"Bearer "+self._personal_token} if self._personal_token else None, timeout=120)
         response.raise_for_status()
         return response.json()
 
@@ -57,3 +83,9 @@ def create_deeptutor_client() -> DeepTutorAPIClient:
     if use_mock:
         return MockDeepTutorClient()
     return RealDeepTutorClient(os.getenv("DEEPTUTOR_API_BASE_URL", "http://127.0.0.1:8000"))
+
+
+class BackendRequestError(RuntimeError):
+    def __init__(self,status_code):
+        self.status_code=status_code
+        super().__init__(f"Backend request failed ({status_code}).")
