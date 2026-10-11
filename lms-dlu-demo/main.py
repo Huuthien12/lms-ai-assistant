@@ -60,6 +60,7 @@ from deeptutor_integration import DeepTutorConfig, DeepTutorService
 from deeptutor_integration.api import create_router as create_deeptutor_router
 from deeptutor_integration.contracts import DocumentInput
 from deeptutor_integration.errors import DeepTutorError
+from deeptutor_integration.verified_publication import VerifiedPublicationService
 from backend.services.ai.deepseek_provider import DeepSeekProvider
 from backend.services.ai.fallback_provider import FallbackAIProvider
 from backend.services.ai.grounded_chat import GroundedChatService
@@ -110,6 +111,7 @@ ODBC_DRIVER = os.getenv(
 
 DEEPTUTOR_CONFIG = DeepTutorConfig.from_env(Path(PROJECT_ROOT))
 DEEPTUTOR_SERVICE = DeepTutorService(DEEPTUTOR_CONFIG)
+VERIFIED_PUBLICATIONS = VerifiedPublicationService(DEEPTUTOR_CONFIG)
 QUERY_AUTHORIZER = create_moodle_query_authorizer(DEEPTUTOR_SERVICE, os.getenv("MOODLE_BASE_URL"))
 app.include_router(create_identity_router(QUERY_AUTHORIZER))
 DEEPTUTOR_DIR = str(DEEPTUTOR_CONFIG.deeptutor_dir)
@@ -118,7 +120,7 @@ DEEPTUTOR_EXE = str(DEEPTUTOR_CONFIG.executable)
 app.include_router(create_deeptutor_router(
     DEEPTUTOR_SERVICE,
     write_authorizer=create_moodle_service_dependency(os.getenv("LMS_MOODLE_DISCOVERY_TOKEN")),
-    query_authorizer=QUERY_AUTHORIZER,
+    query_authorizer=QUERY_AUTHORIZER, publication_service=VERIFIED_PUBLICATIONS,
 ))
 
 try:
@@ -128,7 +130,7 @@ except ValueError:
 app.include_router(create_moodle_ingestion_router(
     MOODLE_ADAPTER,
     DEEPTUTOR_SERVICE,
-    service_token=os.getenv("LMS_MOODLE_DISCOVERY_TOKEN"),
+    service_token=os.getenv("LMS_MOODLE_DISCOVERY_TOKEN"), publication_service=VERIFIED_PUBLICATIONS,
 ))
 
 _deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -145,6 +147,7 @@ GROUNDED_CHAT_SERVICE = (
 )
 app.include_router(create_grounded_chat_router(
     DEEPTUTOR_SERVICE, GROUNDED_CHAT_SERVICE, query_authorizer=QUERY_AUTHORIZER,
+    publication_service=VERIFIED_PUBLICATIONS,
 ))
 app.include_router(create_readiness_router(DEEPTUTOR_SERVICE, _ollama_provider, MOODLE_ADAPTER))
 

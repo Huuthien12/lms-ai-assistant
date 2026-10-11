@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -116,3 +117,12 @@ class IntegrationResponse(BaseModel):
     success: bool
     data: dict[str, Any] | list[Any] | None = None
     error: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class AuthorizedCourseScope:
+    moodle_course_id: int
+    course_key: str
+    kb_name: str
+    owner_ref: str
+    source_namespace: str

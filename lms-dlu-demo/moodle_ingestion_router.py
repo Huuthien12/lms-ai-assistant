@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from deeptutor_integration.contracts import DocumentInput, NormalizedDocument
+from deeptutor_integration.contracts import AuthorizedCourseScope, DocumentInput, NormalizedDocument
 from deeptutor_integration.document_normalizer import DocumentNormalizer
 from deeptutor_integration.errors import DeepTutorError
 from deeptutor_integration.moodle_ingestion_ledger import MoodleIngestionLedger
@@ -26,6 +26,7 @@ def create_moodle_ingestion_router(
     normalizer: DocumentNormalizer | None = None,
     ledger: MoodleIngestionLedger | None = None,
     service_token: str | None = None,
+    publication_service=None,
 ) -> APIRouter:
     router = APIRouter(tags=["moodle-ingestion"])
     normalizer = normalizer or DocumentNormalizer()
@@ -80,6 +81,22 @@ def create_moodle_ingestion_router(
             kb_id=kb_id,
         )
 
+    def publication_scope(numeric_id):
+        course=moodle_adapter.get_course(numeric_id)
+        if type(course.get("id")) is not int or course["id"] != numeric_id or not isinstance(course.get("shortname"),str):
+            raise DeepTutorError("invalid_course_scope","Moodle course scope is invalid.",status_code=503)
+        canonical=course["shortname"].strip()
+        return AuthorizedCourseScope(numeric_id,canonical,deeptutor_service.kb_name(canonical),
+            "internal-service",moodle_adapter.base_url.rstrip("/"))
+
+    @router.delete("/moodle/courses/{course_id}/resources/{resource_id}", dependencies=[Depends(require_configured_moodle_service)])
+    def retire_resource(course_id: int, resource_id: int):
+        if publication_service is None or moodle_adapter is None:
+            raise HTTPException(503,detail={"code":"publication_unavailable","message":"Publication is unavailable."})
+        try: return publication_service.delete(publication_scope(course_id),str(resource_id))
+        except DeepTutorError as error: raise HTTPException(error.status_code,detail=error.as_dict()) from None
+        except Exception: raise HTTPException(503,detail={"code":"moodle_unavailable","message":"Moodle is unavailable."}) from None
+
     @router.post("/moodle/resources/ingest", dependencies=[Depends(require_configured_moodle_service)])
     def ingest_moodle_resource(request: MoodleIngestionInput) -> dict[str, Any]:
         if moodle_adapter is None:
@@ -97,6 +114,11 @@ def create_moodle_ingestion_router(
         try:
             normalized = normalizer.normalize(source)
             kb_id = deeptutor_service.kb_name(normalized.course_id, request.kb_name)
+            if publication_service is not None:
+                scope=publication_scope(request.course_id_moodle)
+                if scope.kb_name != kb_id:
+                    raise DeepTutorError("kb_course_mismatch","Knowledge base does not match the course.",status_code=422)
+                return publication_service.publish(scope,normalized)
             if ledger.contains(normalized):
                 return {
                     "document_id": normalized.document_id,

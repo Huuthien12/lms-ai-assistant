@@ -18,6 +18,7 @@ from deeptutor_integration.auth_contracts import (
 from deeptutor_integration.course_authorization_policy import CourseAuthorizationPolicy
 from deeptutor_integration.errors import DeepTutorError
 from deeptutor_integration.service import DeepTutorService
+from deeptutor_integration.contracts import AuthorizedCourseScope
 
 
 def _reject(error: AuthContractError) -> None:
@@ -53,15 +54,6 @@ def _moodle_call(base_url: str, token: str, function: str, **parameters):
             _reject(PrincipalRequiredError())
         _reject(MoodleAuthorizationUnavailableError())
     return data
-
-
-@dataclass(frozen=True)
-class AuthorizedCourseScope:
-    moodle_course_id: int
-    course_key: str
-    kb_name: str
-    owner_ref: str
-    source_namespace: str
 
 
 @dataclass

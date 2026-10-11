@@ -215,7 +215,9 @@ def test_actual_main_composition_injects_the_shared_boundary(runtime, monkeypatc
         response = TestClient(main.app).post(path, headers={"Authorization": "Bearer student-a"}, json=payload(path))
         assert response.status_code == 200
         assert runtime[4].call_count == 2
-        service.query.assert_called_once()
+        # Production no longer invokes opaque legacy retrieval; an unpublished course is empty/safe.
+        service.query.assert_not_called()
+        orchestrator.generate.assert_not_awaited()
     finally:
         main.app.dependency_overrides.clear()
 

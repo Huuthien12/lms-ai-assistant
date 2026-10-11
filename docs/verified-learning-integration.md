@@ -34,3 +34,29 @@ health stays minimal. New /learning routes apply the same dependency directly.
 
 The old SQL schemas are preserved. VerifiedLearningArtifacts is an additive binding
 and context table, not a destructive migration or implicit owner backfill.
+
+## Full-source publication and lifecycle
+
+The adapter uses DeepTutor's existing LlamaIndex persisted nodes and plain vector
+retriever, avoiding the legacy 200-character serializer and query-fusion/synthesis.
+Every document version is indexed into an immutable private engine KB. The logical
+course KB remains server-controlled; private publication KBs are never selectors
+accepted from a student. Other engine providers fail closed until their raw-node
+adapter supports equivalent evidence.
+
+Canonical source-ref/hash helpers were adopted from the audited local groundwork;
+the synthetic-only verifier was not promoted into production evidence. The single
+AuthorizedCourseScope now lives in integration contracts. ACTIVE Ledger V2 records
+bind namespace, numeric course, logical KB, source/artifact hashes, real engine node
+IDs/content hashes and publication/index identity. No filename-derived ownership.
+
+Ingestion publishes a manifest only after full-node export succeeds. A single
+locked write retires the old record and activates the new one. Failed publication
+marks FAILED and leaves the previous ACTIVE record intact. Update/delete serializes
+with context leases held through provider calls, so completed retirement cannot
+race an old source into a prompt. Private old index artifacts are retained for
+recovery but never selected by ACTIVE-only retrieval.
+
+The context builder selects whole verified chunks within 32,000 characters. UI
+preview is separate; citations correspond exactly to selected prompt chunks.
+Resource-derived paths reject traversal/absolute forms and resolved-root escapes.
