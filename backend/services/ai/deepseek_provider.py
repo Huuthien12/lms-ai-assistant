@@ -49,8 +49,20 @@ class DeepSeekProvider(LLMProvider):
                     latency_ms = (time.time() - start_time) * 1000
 
                     if response.status_code == 200:
-                        data = response.json()
-                        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        try:
+                            data = response.json()
+                            choices = data.get("choices") if isinstance(data, dict) else None
+                            message = (choices[0].get("message") if isinstance(choices, list)
+                                       and choices and isinstance(choices[0], dict) else None)
+                            content = message.get("content") if isinstance(message, dict) else None
+                            if not isinstance(content, str) or not content.strip():
+                                raise ValueError("invalid response")
+                        except (ValueError, TypeError, KeyError):
+                            return LLMResult(
+                                status="error", provider="deepseek", model=self.model,
+                                content="", latency_ms=latency_ms,
+                                error_code="INVALID_RESPONSE", fallback_used=False,
+                            )
                         usage = data.get("usage", {})
                         return LLMResult(
                             status="success",

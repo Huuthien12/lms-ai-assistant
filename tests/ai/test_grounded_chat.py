@@ -98,3 +98,17 @@ async def test_empty_context_returns_safe_response_without_provider(mock_orchest
     assert response.sources == []
     assert response.ai == {"provider": "safe-fallback", "model": "local-safe", "fallback_used": True}
     mock_orchestrator.generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_provider_error_content_is_not_public(mock_orchestrator):
+    mock_orchestrator.generate.return_value = LLMResult(
+        "error", "ollama", "qwen2.5:3b", "SECRET_BODY", 0,
+        error_code="SECRET_ERROR", fallback_used=True)
+    request = GroundedChatRequest("Question", [RetrievedContextItem(text="Context", source_id="trusted")],
+                                  "INT1339", "int1339-python")
+    result = await GroundedChatService(mock_orchestrator).chat(request)
+    assert result.status == "error" and result.answer == ""
+    assert result.sources == [{"source_id": "trusted"}]
+    assert result.ai == {"provider": "ollama", "model": "qwen2.5:3b", "fallback_used": True}
+    assert "SECRET" not in str(result)

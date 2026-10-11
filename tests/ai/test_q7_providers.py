@@ -255,3 +255,25 @@ async def test_orchestrator_and_primary_exception_safety(caplog):
     assert health["status"] == "unavailable"
     assert "SECRET" not in str(health) + caplog.text
     local.generate.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["deepseek-response", "ollama-options"])
+async def test_invalid_response_and_request_do_not_trigger_fallback(mocked_http, kind):
+    local = OllamaProvider()
+    if kind == "deepseek-response":
+        primary = DeepSeekProvider("SECRET_KEY")
+        post, _ = mocked_http
+        post.side_effect = None
+        post.return_value = httpx.Response(200, text="SECRET_INVALID_JSON")
+        kwargs, code = {}, "INVALID_RESPONSE"
+    else:
+        primary = OllamaProvider()
+        kwargs, code = {"options": "SECRET_PAYLOAD"}, "INVALID_REQUEST"
+    local.generate = AsyncMock()
+    result = await AIOrchestrator(FallbackAIProvider(primary, local)).generate("Hi", **kwargs)
+    assert result.status == "error" and result.error_code == code
+    assert result.provider == primary.provider and result.model == primary.model
+    assert result.content == "" and result.fallback_used is False
+    assert "SECRET" not in repr(result)
+    local.generate.assert_not_called()

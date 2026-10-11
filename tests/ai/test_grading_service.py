@@ -132,3 +132,14 @@ def test_grading_has_no_llm_dependency_or_calls(questions):
     with patch("backend.services.ai.orchestrator.AIOrchestrator.generate", new_callable=AsyncMock) as generate:
         GradingService().grade(questions, answers_for(questions, ["A", "B", "A"]))
         generate.assert_not_called()
+
+
+def test_client_answer_key_claims_cannot_override_trusted_grading(questions):
+    answers = answers_for(questions, ["B", "B", "B"])
+    for answer in answers:
+        answer.update(correct_option_id="B", correct_answer="B", answer_key="B", correct=True)
+    before = deepcopy(questions)
+    first = GradingService().grade(questions, answers)
+    assert first == GradingService().grade(questions, answers)
+    assert first["score_percent"] == 0 and first["correct_count"] == 0
+    assert questions == before

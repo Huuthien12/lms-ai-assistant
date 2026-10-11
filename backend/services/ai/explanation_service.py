@@ -3,6 +3,7 @@ from copy import deepcopy
 from typing import Any, Dict, Optional
 
 from backend.services.ai.orchestrator import AIOrchestrator
+from backend.services.ai.provider_base import LLMResult
 
 
 class ExplanationService:
@@ -70,7 +71,7 @@ class ExplanationService:
             )
         except Exception:
             raise ValueError("EXPLANATION_GENERATION_FAILED") from None
-        if result.status != "success":
+        if not isinstance(result, LLMResult) or result.status != "success":
             raise ValueError("EXPLANATION_GENERATION_FAILED")
 
         try:

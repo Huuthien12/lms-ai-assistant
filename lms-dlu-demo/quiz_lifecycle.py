@@ -218,7 +218,7 @@ def _trusted_questions(questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     try:
         # The validator deliberately allowlists only quiz content; question_id is
         # lifecycle metadata and is checked separately below.
-        validated = QuizService.validate_and_parse_quiz(None, {"questions": questions})["questions"]
+        validated = QuizService.validate_and_parse_quiz({"questions": questions})["questions"]
     except ValueError as exc:
         raise ValueError("invalid_quiz_definition") from exc
     result = []

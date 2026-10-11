@@ -115,7 +115,7 @@ class GroundedChatService:
         )
         return GroundedChatResponse(
             status=result.status,
-            answer=result.content,
+            answer=result.content if result.status == "success" else "",
             course_id=request.course_id,
             kb_name=request.kb_name,
             sources=sources_meta,

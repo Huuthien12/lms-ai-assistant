@@ -3,6 +3,7 @@ from copy import deepcopy
 from typing import Any, Dict, Optional
 
 from backend.services.ai.orchestrator import AIOrchestrator
+from backend.services.ai.provider_base import LLMResult
 
 
 class FlashcardService:
@@ -59,6 +60,7 @@ class FlashcardService:
         if not isinstance(cards, list) or not cards:
             raise ValueError("INVALID_FLASHCARD_SCHEMA")
         validated_cards = []
+        card_pairs = set()
         for card in cards:
             if not isinstance(card, dict):
                 raise ValueError("INVALID_FLASHCARD_SCHEMA")
@@ -69,6 +71,10 @@ class FlashcardService:
                 raise ValueError("INVALID_FLASHCARD_SCHEMA")
             if not isinstance(back, str) or not back.strip():
                 raise ValueError("INVALID_FLASHCARD_SCHEMA")
+            pair = (" ".join(front.casefold().split()), " ".join(back.casefold().split()))
+            if pair in card_pairs:
+                raise ValueError("INVALID_FLASHCARD_SCHEMA")
+            card_pairs.add(pair)
             if not isinstance(topic, str) or not topic.strip():
                 raise ValueError("INVALID_FLASHCARD_SCHEMA")
             if not isinstance(difficulty, str) or difficulty not in self.DIFFICULTIES:
@@ -96,7 +102,7 @@ class FlashcardService:
             )
         except Exception:
             raise ValueError("FLASHCARD_GENERATION_FAILED") from None
-        if result.status != "success":
+        if not isinstance(result, LLMResult) or result.status != "success":
             raise ValueError("FLASHCARD_GENERATION_FAILED")
         return self.validate_and_parse_flashcards(
             result.content, count, sources, trusted_topic, trusted_difficulty,
