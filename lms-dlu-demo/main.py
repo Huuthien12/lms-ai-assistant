@@ -66,6 +66,7 @@ from backend.services.ai.grounded_chat import GroundedChatService
 from backend.services.ai.ollama_provider import OllamaProvider
 from backend.services.ai.orchestrator import AIOrchestrator
 from grounded_chat_router import create_grounded_chat_router
+from course_query_auth import create_moodle_query_authorizer
 from moodle_adapter import MoodleAdapter
 from moodle_ingestion_router import create_moodle_ingestion_router
 from moodle_service_auth import create_moodle_service_dependency, require_moodle_service
@@ -108,12 +109,14 @@ ODBC_DRIVER = os.getenv(
 
 DEEPTUTOR_CONFIG = DeepTutorConfig.from_env(Path(PROJECT_ROOT))
 DEEPTUTOR_SERVICE = DeepTutorService(DEEPTUTOR_CONFIG)
+QUERY_AUTHORIZER = create_moodle_query_authorizer(DEEPTUTOR_SERVICE, os.getenv("MOODLE_BASE_URL"))
 DEEPTUTOR_DIR = str(DEEPTUTOR_CONFIG.deeptutor_dir)
 DEEPTUTOR_EXE = str(DEEPTUTOR_CONFIG.executable)
 
 app.include_router(create_deeptutor_router(
     DEEPTUTOR_SERVICE,
     write_authorizer=create_moodle_service_dependency(os.getenv("LMS_MOODLE_DISCOVERY_TOKEN")),
+    query_authorizer=QUERY_AUTHORIZER,
 ))
 
 try:
@@ -138,7 +141,9 @@ GROUNDED_CHAT_SERVICE = (
     if _deepseek_api_key
     else GroundedChatService(AIOrchestrator(_ollama_provider))
 )
-app.include_router(create_grounded_chat_router(DEEPTUTOR_SERVICE, GROUNDED_CHAT_SERVICE))
+app.include_router(create_grounded_chat_router(
+    DEEPTUTOR_SERVICE, GROUNDED_CHAT_SERVICE, query_authorizer=QUERY_AUTHORIZER,
+))
 app.include_router(create_readiness_router(DEEPTUTOR_SERVICE, _ollama_provider, MOODLE_ADAPTER))
 
 from lms_chat_router import router as chat_ui_router

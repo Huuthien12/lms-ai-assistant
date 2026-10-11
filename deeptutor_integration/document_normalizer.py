@@ -35,6 +35,11 @@ def source_sha256(content: bytes) -> str:
     return sha256(content).hexdigest()
 
 
+def artifact_sha256(markdown: str) -> str:
+    """Hash the exact UTF-8 normalized artifact handed to an indexer."""
+    return sha256(markdown.encode("utf-8")).hexdigest()
+
+
 def validate_document_format(source: SourceDocument) -> DocumentFormat:
     extension = Path(source.filename).suffix.lower()
     document_format = DOCUMENT_FORMATS.get(extension)
@@ -81,6 +86,7 @@ class DocumentNormalizer:
             source=source.source,
             metadata=source.metadata,
             sha256=digest,
+            artifact_sha256=artifact_sha256(markdown),
             markdown=markdown,
             normalizer_version=version,
         )

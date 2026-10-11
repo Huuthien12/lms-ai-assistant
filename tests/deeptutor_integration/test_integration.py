@@ -110,6 +110,8 @@ class DeepTutorIntegrationTests(unittest.TestCase):
             DeepTutorService.kb_name("INT1339", "lms-int1339")
         with self.assertRaisesRegex(DeepTutorError, "does not match"):
             DeepTutorService.kb_name("MATH101", "int1339-python")
+        with self.assertRaisesRegex(DeepTutorError, "Course id is invalid"):
+            DeepTutorService.kb_name("MATH101!")
 
     def test_query_missing_and_unready_kb(self):
         with TemporaryDirectory() as tmp:

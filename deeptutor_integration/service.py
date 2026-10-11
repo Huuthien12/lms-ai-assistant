@@ -14,6 +14,7 @@ from .errors import DeepTutorError
 
 class DeepTutorService:
     COURSE_KNOWLEDGE_BASES = {"int1339": "int1339-python"}
+    COURSE_ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]*")
     SUPPORTED_DOCUMENT_EXTENSIONS = {
         ".csv", ".docx", ".epub", ".htm", ".html", ".json",
         ".md", ".pdf", ".pptx", ".rtf", ".txt",
@@ -25,9 +26,11 @@ class DeepTutorService:
     @staticmethod
     def kb_name(course_id: str, explicit: str | None = None) -> str:
         course_key = course_id.strip().lower()
+        if not DeepTutorService.COURSE_ID_PATTERN.fullmatch(course_key):
+            raise DeepTutorError("invalid_course", "Course id is invalid.", status_code=422)
         default = re.sub(
             r"[^a-z0-9_-]+", "-",
-            DeepTutorService.COURSE_KNOWLEDGE_BASES.get(course_key, f"lms-{course_id}").strip().lower(),
+            DeepTutorService.COURSE_KNOWLEDGE_BASES.get(course_key, f"lms-{course_key}").strip().lower(),
         ).strip("-")
         normalized = re.sub(r"[^a-z0-9_-]+", "-", (explicit or default).strip().lower()).strip("-")
         if not normalized:
@@ -187,4 +190,10 @@ class DeepTutorService:
         if not self._ready(info):
             raise DeepTutorError("kb_not_ready", "Knowledge base is not ready.", status_code=409)
         result = self.adapter.search(kb_id, request.question.strip())
+        if not isinstance(result, dict):
+            raise DeepTutorError("invalid_query_response", "Retrieval returned an invalid response.", status_code=502)
+        if result.get("needs_reindex"):
+            raise DeepTutorError("kb_not_ready", "Knowledge base requires indexing.", status_code=409)
+        if result.get("error_type") or result.get("error") or result.get("status") == "error":
+            raise DeepTutorError("retrieval_failure", "Retrieval could not be completed.", status_code=502)
         return {"course_id": request.course_id, "kb_id": kb_id, "result": result}

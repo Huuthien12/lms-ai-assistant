@@ -86,7 +86,8 @@ def test_grounded_chat_uses_mapped_retrieval_context_and_local_ollama(tmp_path):
     service, adapter = deeptutor_service(tmp_path)
     app = FastAPI()
     app.include_router(create_grounded_chat_router(
-        service, GroundedChatService(AIOrchestrator(OllamaProvider()))
+        service, GroundedChatService(AIOrchestrator(OllamaProvider())),
+        query_authorizer=lambda: lambda query: None,
     ))
     model_response = httpx.Response(200, json={"message": {"content": "A function is a named block."}})
 
@@ -134,7 +135,7 @@ def test_conflicting_course_knowledge_base_is_a_safe_422(tmp_path):
     chat = MagicMock()
     chat.chat = AsyncMock()
     app = FastAPI()
-    app.include_router(create_grounded_chat_router(service, chat))
+    app.include_router(create_grounded_chat_router(service, chat, query_authorizer=lambda: lambda query: None))
 
     response = TestClient(app).post("/chat/grounded", json={
         "course_id": "INT1339", "kb_name": "lms-other", "question": "Question",
