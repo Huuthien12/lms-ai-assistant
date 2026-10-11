@@ -319,3 +319,21 @@ def test_review_uses_submitted_owner_state_and_is_safely_degraded():
     state["attempt"] = ("quiz-1", "student-1", "IN_PROGRESS")
     with pytest.raises(ValueError, match="attempt_not_submitted"):
         repo.review("attempt-1", "student-1")
+
+
+@pytest.mark.parametrize("invalid", ["duplicate_id", "duplicate_question", "duplicate_option", "invalid_key", "missing_field"])
+def test_lifecycle_validator_rejects_malformed_internal_definitions(invalid):
+    questions = copy.deepcopy(QUESTIONS)
+    if invalid in {"duplicate_id", "duplicate_question"}:
+        second = copy.deepcopy(questions[0])
+        second.update(question_id="q1" if invalid == "duplicate_id" else "q2",
+                      question="Two?" if invalid == "duplicate_id" else "  ONE? ")
+        questions.append(second)
+    elif invalid == "duplicate_option":
+        questions[0]["options"][1]["text"] = " a "
+    elif invalid == "invalid_key":
+        questions[0]["correct_option_id"] = "forged"
+    else:
+        questions[0].pop("explanation")
+    with pytest.raises(ValueError, match="^invalid_quiz_definition$"):
+        _trusted_questions(questions)

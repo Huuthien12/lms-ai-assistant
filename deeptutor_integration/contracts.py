@@ -63,6 +63,7 @@ class NormalizedDocument(_SourceMetadata):
     original_mime_type: str = Field(min_length=1, max_length=200)
     source: str = Field(default="unknown", min_length=1, max_length=120)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    artifact_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     markdown: str = Field(min_length=1)
     normalizer_version: str = Field(min_length=1, max_length=120)
 

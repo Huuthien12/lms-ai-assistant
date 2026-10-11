@@ -23,12 +23,13 @@ class QuizService:
             return deepcopy(source_metadata)
         raise ValueError("INVALID_QUIZ_REQUEST: invalid source_metadata")
 
+    @staticmethod
     def validate_and_parse_quiz(
-        self, raw_content: Any, question_count: Optional[int] = None,
+        raw_content: Any, question_count: Optional[int] = None,
         source_metadata: Any = None,
     ) -> Dict[str, Any]:
         """Parse and validate internal MCQs; only caller sources are retained."""
-        source_metadata = self._copy_sources(source_metadata)
+        source_metadata = QuizService._copy_sources(source_metadata)
         try:
             if isinstance(raw_content, dict):
                 data = raw_content

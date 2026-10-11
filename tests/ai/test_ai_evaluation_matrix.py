@@ -41,7 +41,9 @@ def make_client(orch, context="Python is a language.", course="c1", source_scope
         "sources": sources, "answer": "SECRET_GENERATED_NOT_CONTEXT",
     }}
     app = FastAPI()
-    app.include_router(create_grounded_chat_router(backend, GroundedChatService(orch)))
+    app.include_router(create_grounded_chat_router(
+        backend, GroundedChatService(orch), query_authorizer=lambda: lambda query: None,
+    ))
     return TestClient(app), backend
 
 

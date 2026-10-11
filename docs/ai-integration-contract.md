@@ -15,16 +15,19 @@ DeepSeek health checks configuration only, not live connectivity.
 
 ## Grounded chat
 
-`POST /chat/grounded` receives `question`, `course_id`, optional `kb_name`;
-strings are trimmed and blanks rejected. The route calls the public DeepTutor
-query contract and passes only retrieved source content to GroundedChatService.
-Returned course must match the request and returned KB must match the server-resolved
-course-to-KB mapping before AI use. Explicit caller KB names remain subject to
+`POST /chat/grounded` and `/lms/chat` share the guarded handler from PR #33.
+They receive `question`, `course_id`, optional `kb_name`; strings are trimmed and
+blanks rejected. The production Moodle dependency verifies a personal Bearer token,
+principal/binding and active enrollment through the shared policy before retrieval.
+The route passes only retrieved source content to GroundedChatService. Returned
+course and KB must match the server-canonicalized authorized query before AI use.
+Explicit caller KB names remain subject to
 DeepTutor's mapping check; they are not ownership proof. Envelope shape and
 explicit source course/KB identity conflicts fail closed. Missing per-source
 provenance identity remains an upstream dependency. Document provenance/lifecycle
-is not yet verified. These checks do not provide end-user authorization; Q5 remains
-blocked on verified identity and course access, and full Q6 provenance remains blocked.
+is not yet verified. Envelope checks do not grant authorization; the shared
+Moodle boundary does. Full Q6 provenance remains blocked. Streamlit verified login
+and ownership enforcement for existing learning/history/internal APIs remain follow-ups.
 
 Response fields are `status`, `answer`, `course_id`, `kb_name`, `sources`, and
 `ai` (`provider`, `model`, `fallback_used`). Structured sources originate from
@@ -50,6 +53,11 @@ Slide/section are not added to the public citation schema.
   Output front/back/topic/difficulty uses trusted requested topic/difficulty.
   Duplicate normalized front/back pairs are rejected; sharing just one side is
   allowed. Generation is not learning evidence; a real caller review is required.
+
+Quiz parsing is a static validator independent of an orchestrator instance; the
+lifecycle calls it directly and validates persistent question IDs separately.
+Quiz/Flashcard generation remains a service layer taking caller-supplied context;
+PR #32 adds no HTTP generation route or independent KB resolver/authorization policy.
 
 Normalization for duplicate checks case-folds and collapses whitespace. Sources
 accept null, a dict, or list of dicts, are copied, and never come from the model.

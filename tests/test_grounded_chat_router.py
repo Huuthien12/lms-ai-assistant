@@ -37,7 +37,7 @@ class FakeDeepTutor:
 
 def client(service, chat_service):
     app = FastAPI()
-    app.include_router(create_grounded_chat_router(service, chat_service))
+    app.include_router(create_grounded_chat_router(service, chat_service, query_authorizer=lambda: lambda query: None))
     return TestClient(app)
 
 

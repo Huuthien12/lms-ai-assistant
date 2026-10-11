@@ -384,3 +384,16 @@ async def test_sources_snapshot_before_provider_and_public_safe(mock_orchestrato
     result = await service.generate_grounded_quiz(**grounded_input(), source_metadata=metadata, client_facing=False)
     assert result["questions"][0]["source_metadata"] == original
     assert "source_metadata" not in service.to_public_result(result)["questions"][0]
+
+
+@pytest.mark.parametrize("sources", [{"source_id": "lecture", "metadata": {"page": 2}},
+                                    [{"source_id": "lecture", "metadata": {"page": 2}}]])
+def test_validator_without_orchestrator_preserves_source_snapshot(mock_orchestrator, sources):
+    raw = json.loads(mock_orchestrator.generate.return_value.content)
+    expected = deepcopy(sources)
+    internal = QuizService.validate_and_parse_quiz(raw, question_count=1, source_metadata=sources)
+    source = sources if isinstance(sources, dict) else sources[0]
+    source["metadata"]["page"] = 99
+    assert internal["questions"][0]["source_metadata"] == expected
+    assert set(QuizService.to_public_result(internal)["questions"][0]) == {"question", "type", "options"}
+    mock_orchestrator.generate.assert_not_called()
