@@ -1,5 +1,8 @@
 """Live Moodle credentials/enrollment adapted to the shared course policy."""
 from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass, field
+from hashlib import sha256
+from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
@@ -52,7 +55,101 @@ def _moodle_call(base_url: str, token: str, function: str, **parameters):
     return data
 
 
-def create_moodle_query_authorizer(service: DeepTutorService, base_url: str | None):
+@dataclass(frozen=True)
+class AuthorizedCourseScope:
+    moodle_course_id: int
+    course_key: str
+    kb_name: str
+    owner_ref: str
+    source_namespace: str
+
+
+@dataclass
+class MoodleQueryAccess:
+    """Request-local evidence, shared by login, query and learning HTTP guards."""
+    service: DeepTutorService = field(repr=False)
+    request: Request = field(repr=False)
+    principal: VerifiedPrincipal
+    binding: MoodleUserBinding
+    _token: str = field(repr=False)
+    action_authorizer: Any = field(default=None, repr=False)
+    _enrollments: list | None = field(default=None, repr=False)
+
+    @property
+    def owner_ref(self) -> str:
+        return sha256((self.principal.issuer + "\0" + self.principal.subject).encode()).hexdigest()
+
+    def courses(self) -> list[dict]:
+        self.principal.require_active()
+        if self._enrollments is None:
+            courses = _moodle_call(self.binding.moodle_namespace, self._token,
+                                   "core_enrol_get_users_courses",
+                                   userid=self.binding.moodle_user_id, returnusercount=0)
+            if not isinstance(courses, list) or any(
+                not isinstance(c, dict) or type(c.get("id")) is not int or c["id"] <= 0
+                or not isinstance(c.get("shortname"), str) or not c["shortname"].strip()
+                for c in courses
+            ):
+                _reject(MoodleAuthorizationUnavailableError())
+            self._enrollments = courses
+        return self._enrollments
+
+    def scope(self, course_id: str | int, kb_name: str | None = None,
+              action: CourseAction = CourseAction.QUERY_COURSE) -> AuthorizedCourseScope:
+        matches = [c for c in self.courses() if (
+            c["id"] == course_id if type(course_id) is int
+            else c["shortname"].strip().lower() == str(course_id).strip().lower()
+        )]
+        if not matches:
+            _reject(CourseAccessDeniedError())
+        if len(matches) != 1:
+            _reject(MoodleAuthorizationUnavailableError())
+        course = matches[0]
+        # One Moodle ID and one application alias must identify the same enrollment.
+        if sum(c["id"] == course["id"] for c in self.courses()) != 1:
+            _reject(MoodleAuthorizationUnavailableError())
+        if sum(c["shortname"].strip().lower() == course["shortname"].strip().lower()
+               for c in self.courses()) != 1:
+            _reject(MoodleAuthorizationUnavailableError())
+
+        def decision(binding, course_id, requested_action):
+            if requested_action is not CourseAction.QUERY_COURSE:
+                if self.action_authorizer is None:
+                    raise AuthorizationNotConfiguredError()
+                return self.action_authorizer(binding, course_id, requested_action)
+            allowed = binding == self.binding and course_id == course["id"]
+            return AuthorizationDecision(allowed, "active_enrollment" if allowed else "course_access_denied",
+                course_id, requested_action, datetime.now(timezone.utc), "moodle-active-enrollment/v1", CacheState.LIVE)
+
+        policy = CourseAuthorizationPolicy(self.binding.moodle_namespace,
+            lambda _: self.principal, lambda _: self.binding, decision)
+        try:
+            policy.authorize(self.request, course["id"], action)
+            canonical = course["shortname"].strip()
+            kb = self.service.kb_name(canonical, kb_name)
+        except AuthContractError as error:
+            _reject(error)
+        except DeepTutorError as error:
+            raise HTTPException(error.status_code, detail=error.as_dict()) from None
+        return AuthorizedCourseScope(course["id"], canonical, kb, self.owner_ref, self.binding.moodle_namespace)
+
+    def require_owner(self, owner_ref: str) -> None:
+        if owner_ref != self.owner_ref:
+            _reject(CourseAccessDeniedError())
+
+    def moodle_adapter(self):
+        # Reuse Tho's secure-download/resource adapter with this verified user's credential.
+        from moodle_adapter import MoodleAdapter
+        return MoodleAdapter(self.binding.moodle_namespace, self._token)
+
+    def __call__(self, query) -> None:
+        scope = self.scope(query.course_id, query.kb_id)
+        query.course_id, query.kb_id = scope.course_key, scope.kb_name
+        self.request.state.authorized_scope = scope
+
+
+def create_moodle_query_authorizer(service: DeepTutorService, base_url: str | None,
+                                   action_authorizer=None):
     namespace = (base_url or "").rstrip("/")
 
     def require_course_query(request: Request) -> QueryAccessChecker:
@@ -70,7 +167,6 @@ def create_moodle_query_authorizer(service: DeepTutorService, base_url: str | No
             configured = False
         if not configured:
             _reject(AuthorizationNotConfiguredError())
-
         identity = _moodle_call(namespace, token, "core_webservice_get_site_info")
         user_id = identity.get("userid") if isinstance(identity, dict) else None
         if type(user_id) is not int or user_id <= 0:
@@ -78,49 +174,8 @@ def create_moodle_query_authorizer(service: DeepTutorService, base_url: str | No
         now = datetime.now(timezone.utc)
         principal = VerifiedPrincipal(str(user_id), namespace, now, now + timedelta(minutes=1))
         binding = MoodleUserBinding(namespace, principal.subject, namespace, user_id, 1, True)
-
-        def authorize_query(query):
-            # This endpoint returns only active enrollments accessible to the token's user.
-            courses = _moodle_call(namespace, token, "core_enrol_get_users_courses",
-                                   userid=user_id, returnusercount=0)
-            if not isinstance(courses, list) or any(
-                not isinstance(course, dict) or type(course.get("id")) is not int
-                or course["id"] <= 0 or not isinstance(course.get("shortname"), str)
-                or not course["shortname"].strip() for course in courses
-            ):
-                _reject(MoodleAuthorizationUnavailableError())
-            matches = [course for course in courses
-                       if course["shortname"].strip().lower() == query.course_id.strip().lower()]
-            if not matches:
-                _reject(CourseAccessDeniedError())
-            if len(matches) != 1:
-                _reject(MoodleAuthorizationUnavailableError())
-            course = matches[0]
-            canonical_key = course["shortname"].strip()
-            try:
-                kb_id = service.kb_name(canonical_key, query.kb_id)
-            except DeepTutorError as error:
-                raise HTTPException(error.status_code, detail=error.as_dict()) from None
-
-            def enrolled_decision(bound_user, course_id, action):
-                allowed = (bound_user == binding and course_id == course["id"]
-                           and action is CourseAction.QUERY_COURSE)
-                return AuthorizationDecision(
-                    allowed, "active_enrollment" if allowed else "course_access_denied",
-                    course_id, action, datetime.now(timezone.utc), "moodle-active-enrollment/v1",
-                    CacheState.LIVE,
-                )
-
-            policy = CourseAuthorizationPolicy(
-                namespace, lambda _: principal, lambda _: binding, enrolled_decision,
-            )
-            try:
-                policy.authorize(request, course["id"], CourseAction.QUERY_COURSE)
-            except AuthContractError as error:
-                _reject(error)
-            # Retrieval uses the same server-resolved course and KB that were authorized.
-            query.course_id, query.kb_id = canonical_key, kb_id
-
-        return authorize_query
+        access = MoodleQueryAccess(service, request, principal, binding, token, action_authorizer)
+        request.state.moodle_access = access
+        return access
 
     return require_course_query
