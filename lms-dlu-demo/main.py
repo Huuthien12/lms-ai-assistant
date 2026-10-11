@@ -1774,6 +1774,8 @@ def delete_chat_history(
 
 # ==============================================================================
 # 24. RUN
+from legacy_route_security import install_legacy_security, resource_owner_lookup
+install_legacy_security(app, QUERY_AUTHORIZER, resource_owner_lookup(get_connection))
 # ==============================================================================
 
 if __name__ == "__main__":
