@@ -85,7 +85,19 @@ def test_symlink_staging_parent_escape_is_rejected(tmp_path):
     outside=tmp_path/"outside"; outside.mkdir()
     root=tmp_path/"runtime"; root.mkdir()
     try: (root/"documents").symlink_to(outside,target_is_directory=True)
-    except OSError: pytest.skip("Windows symlink privilege unavailable")
+    except OSError:
+        import os,subprocess
+        if os.name!="nt": raise
+        link=str(root/"documents").replace("'","''"); destination=str(outside).replace("'","''")
+        subprocess.run(["powershell","-NoProfile","-Command",f"New-Item -ItemType Junction -Path '{link}' -Target '{destination}' | Out-Null"],check=True,capture_output=True,creationflags=subprocess.CREATE_NO_WINDOW)
     service=DeepTutorService(DeepTutorConfig(tmp_path,tmp_path/"engine",tmp_path/"cli",root))
     with pytest.raises(DeepTutorError):
         service._document_path(DocumentInput(course_id="INT1339",document_id="1",filename="doc.md",content="text"))
+
+
+def test_unexpected_retrieval_failure_is_controlled(publication):
+    service,scope,adapter=publication; service.publish(scope,doc())
+    adapter.retrieve.side_effect=RuntimeError("private dependency failure")
+    with pytest.raises(DeepTutorError) as error:
+        with service.context(scope,"q"): pytest.fail("No context after failure")
+    assert error.value.status_code==502 and "private" not in str(error.value)

@@ -69,7 +69,10 @@ def install_legacy_security(app, authorizer, owner_lookup):
                         raise HTTPException(403, detail={"code": "course_access_denied", "message": "Course access is not permitted."})
                 if operation == "review" and request.query_params.get("student_id") != access.owner_ref:
                     access.require_owner(request.query_params.get("student_id", ""))
-            return await call_next(request)
+            response=await call_next(request)
+            if response.status_code>=500:
+                return JSONResponse({"detail":{"code":"learning_dependency_unavailable","message":"Application dependency is unavailable."}},status_code=503)
+            return response
         except AuthContractError as error:
             return JSONResponse({"detail": error.public_payload()}, status_code=error.status_code)
         except HTTPException as error:

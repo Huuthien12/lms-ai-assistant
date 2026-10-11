@@ -53,6 +53,10 @@ def create_moodle_ingestion_router(
             course = moodle_adapter.get_course(course_id_moodle)
             kb_id = deeptutor_service.kb_name(course["shortname"])
             statuses = {"ACTIVE": "indexed", "SUPERSEDED": "superseded", "DELETED": "deleted"}
+            if publication_service is not None:
+                active={d["document_id"] for d in publication_service.documents(publication_scope(course_id_moodle))}
+                return [{**resource,"sync_status":"indexed" if str(resource["resource_id"]) in active else "not_synced","kb_id":kb_id}
+                        for resource in moodle_adapter.list_file_resources(course_id_moodle)]
             return [{**resource, "sync_status": statuses.get(ledger.resource_lifecycle(course["shortname"], str(resource["resource_id"])), "not_synced"), "kb_id": kb_id} for resource in moodle_adapter.list_file_resources(course_id_moodle)]
         except DeepTutorError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.as_dict()) from exc

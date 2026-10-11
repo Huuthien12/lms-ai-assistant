@@ -61,3 +61,10 @@ def test_inventory_and_internal_routes_need_service_evidence(guarded,monkeypatch
     assert client.get(path,headers={"Authorization":"Bearer A"}).status_code==401
     op.assert_not_called()
     assert client.get(path,headers={"X-Internal-Api-Key":"operator"}).status_code==200
+
+
+def test_legacy_sql_exception_details_are_not_exposed(guarded):
+    client,operation,_=guarded
+    operation.side_effect=HTTPException(500,detail="private SQL connection and stack details")
+    response=client.get("/courses/COURSE-A",headers={"Authorization":"Bearer A"})
+    assert response.status_code==503 and "private SQL" not in response.text

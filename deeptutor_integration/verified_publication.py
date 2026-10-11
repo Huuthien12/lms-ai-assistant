@@ -3,6 +3,9 @@ from contextlib import contextmanager
 from hashlib import sha256
 from uuid import uuid4
 from pathlib import Path
+import logging
+
+logger=logging.getLogger(__name__)
 from .contracts import DocumentInput
 from .errors import DeepTutorError
 from .full_source_adapter import DeepTutorFullSourceAdapter
@@ -57,6 +60,7 @@ class VerifiedPublicationService:
                     source_ref=canonical_source_ref(scope.kb_name,version,c["chunk_id"]),
                     content_sha256=canonical_chunk_sha256(c["content"])) for c in result["chunks"])
                 self.ledger.publish_replacement(record,physical,manifest,index_version=result["index_version"])
+                logger.info("publication_active",extra={"course_key":scope.course_key,"kb_name":scope.kb_name,"document_version_id":version})
             except Exception as error:
                 self.ledger.mark_failed(record,"publication_failed")
                 if isinstance(error,DeepTutorError): raise
@@ -82,9 +86,14 @@ class VerifiedPublicationService:
             records=active_records(self.ledger._state(),scope)
             chunks=[]
             for record in records:
-                raw=self.adapter.retrieve(record.provider_publication_ref,question)
+                try: raw=self.adapter.retrieve(record.provider_publication_ref,question)
+                except DeepTutorError: raise
+                except Exception:
+                    raise DeepTutorError("raw_retrieval_unavailable","Full-source retrieval could not be completed.",status_code=502) from None
                 chunks.extend(verify_raw_chunks(record,scope,raw))
-            yield build_context(scope,question,chunks)
+            context=build_context(scope,question,chunks)
+            logger.info("verified_context",extra={"owner_ref":scope.owner_ref,"course_key":scope.course_key,"kb_name":scope.kb_name,"context_id":context.context_id,"chunk_count":len(context.chunks)})
+            yield context
 
     def revalidate(self, context):
         records=active_records(self.ledger._state(),context.scope)
