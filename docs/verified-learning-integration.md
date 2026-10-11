@@ -60,3 +60,69 @@ recovery but never selected by ACTIVE-only retrieval.
 The context builder selects whole verified chunks within 32,000 characters. UI
 preview is separate; citations correspond exactly to selected prompt chunks.
 Resource-derived paths reject traversal/absolute forms and resolved-root escapes.
+
+
+## Learning and storage compatibility
+
+Verified /learning endpoints compose Quan's existing QuizService, QuizRepository,
+GradingService, ExplanationService, FlashcardService, LearningEvidenceRepository,
+MasteryService and recommendation rule evaluation. They do not introduce another
+provider, grading algorithm or Moodle adapter. HTTP DTOs reject caller identity,
+source-context and score claims; owner and current course permission precede mutation.
+
+The new additive VerifiedLearningArtifacts table stores hashed principal/course
+bindings, full generated card front/back, and the exact verified context used for
+quiz/card generation. Existing QuizDefinitions retains server-only answer keys;
+QuizAttempts/QuizAnswers and evidence/mastery remain Quan's existing transaction.
+A definition/registry commit followed by a binding failure can leave an inaccessible
+orphan. No binding means no student access; recovery is operator-only. No existing
+rows are deleted or silently assigned new owners. Back up the DB before deployment;
+startup creates the additive table/index alongside the existing idempotent schemas.
+
+Quiz review loads the persisted question, grading facts and original context. It
+rechecks ACTIVE membership while holding the publication lease before explanation.
+Retired context yields explanation unavailable and zero LLM calls; deterministic
+score and historical artifacts remain readable to their owner. Historical citation
+snapshots record verification at generation, not certification that the source is
+still ACTIVE. Citation integrity does not certify the answer's factual correctness.
+
+## Streamlit and API use
+
+Start FastAPI/Streamlit with the existing project launcher. For a worktree, configure
+DEEPTUTOR_DIR to the installed engine checkout; its venv supplies the bridge SDK.
+Set MOODLE_BASE_URL, SQL and provider/embedding configuration in an ignored local
+.env. Enable Moodle web-service site_info, enrolled-course lookup, course contents
+and secure file download for each intended user's personal token. Never use the
+shared LMS_MOODLE_DISCOVERY_TOKEN as student login evidence.
+
+The active app starts at personal-token login and /auth/me. Each authenticated UI
+rerun refreshes principal-bound courses. Every application request carries only the
+personal Bearer credential; no browser/UI-selected role or student ID grants access.
+Logout clears all Streamlit session state. The five tabs consume /learning routes:
+course documents; saved Chat with source snapshots; public Quiz/attempt/grade/review;
+persisted Flashcards and review evidence; server mastery/rule recommendations.
+The historical demo page remains unreachable after st.stop() for gradual cleanup.
+
+Lecturer sync/retire controls appear only when backend can_sync is true. Configure
+LMS_COURSE_ACTION_AUTHORIZER=module:function with Tho's BoundCourseAuthorizer contract:
+(binding, numeric_course_id, CourseAction) -> exact LIVE AuthorizationDecision.
+Missing, denied, cached or unavailable write evidence fails closed. Operator routes
+remain separately protected by the existing shared service key, and production
+Moodle ingestion/resource status now uses V2 publication. No destructive migration,
+Gemini integration, new RAG engine, or duplicate auth/domain services is included.
+
+## Validation and operational limits
+
+Focused tests use fake Moodle/engine/provider transports and a DB-API contract fake,
+while executing real auth, policy, publication, source verification, domain grading,
+evidence/mastery, API and Streamlit AppTest code. Live SQL connectivity and Ollama
+health are separate infrastructure checks, not proof of the full multi-user scenario.
+The final review report records exact counts and live prerequisites.
+
+The ACTIVE ledger OS lock is held through each generation so retirement cannot race
+an old prompt; concurrent calls can hit the existing lock timeout. Tune concurrency
+only after measuring. Old private indexes are retained for recovery; operator-only
+GC is deferred. Only the current LlamaIndex raw-node adapter is implemented; other
+RAG providers fail closed. No automatic Moodle deletion poll is invented: sync/update
+and retire consume explicit adapter/UI/operator lifecycle signals. Structured Python
+logging records publication/context IDs and counts, never credentials or answer keys.

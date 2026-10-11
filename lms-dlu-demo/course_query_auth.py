@@ -132,7 +132,10 @@ class MoodleQueryAccess:
     def moodle_adapter(self):
         # Reuse Tho's secure-download/resource adapter with this verified user's credential.
         from moodle_adapter import MoodleAdapter
-        return MoodleAdapter(self.binding.moodle_namespace, self._token)
+        adapter=MoodleAdapter(self.binding.moodle_namespace, self._token)
+        adapter._enrolled_courses=self.courses
+        adapter._call_ws=lambda function, **parameters: _moodle_call(self.binding.moodle_namespace,self._token,function,**parameters)
+        return adapter
 
     def __call__(self, query) -> None:
         scope = self.scope(query.course_id, query.kb_id)
@@ -171,3 +174,17 @@ def create_moodle_query_authorizer(service: DeepTutorService, base_url: str | No
         return access
 
     return require_course_query
+
+
+def load_action_authorizer(spec: str | None):
+    """Trusted deployment plug-in for Tho's action evidence, never caller role claims."""
+    if not spec: return None
+    try:
+        from importlib import import_module
+        module,attribute=spec.split(":",1)
+        provider=getattr(import_module(module),attribute)
+        if not callable(provider): raise ValueError()
+        return provider
+    except Exception:
+        def unavailable(*args): raise MoodleAuthorizationUnavailableError()
+        return unavailable

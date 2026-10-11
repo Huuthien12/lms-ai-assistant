@@ -67,7 +67,7 @@ from backend.services.ai.grounded_chat import GroundedChatService
 from backend.services.ai.ollama_provider import OllamaProvider
 from backend.services.ai.orchestrator import AIOrchestrator
 from grounded_chat_router import create_grounded_chat_router
-from course_query_auth import create_moodle_query_authorizer
+from course_query_auth import create_moodle_query_authorizer, load_action_authorizer
 from verified_identity_router import create_identity_router
 from moodle_adapter import MoodleAdapter
 from moodle_ingestion_router import create_moodle_ingestion_router
@@ -112,7 +112,8 @@ ODBC_DRIVER = os.getenv(
 DEEPTUTOR_CONFIG = DeepTutorConfig.from_env(Path(PROJECT_ROOT))
 DEEPTUTOR_SERVICE = DeepTutorService(DEEPTUTOR_CONFIG)
 VERIFIED_PUBLICATIONS = VerifiedPublicationService(DEEPTUTOR_CONFIG)
-QUERY_AUTHORIZER = create_moodle_query_authorizer(DEEPTUTOR_SERVICE, os.getenv("MOODLE_BASE_URL"))
+QUERY_AUTHORIZER = create_moodle_query_authorizer(DEEPTUTOR_SERVICE, os.getenv("MOODLE_BASE_URL"),
+    action_authorizer=load_action_authorizer(os.getenv("LMS_COURSE_ACTION_AUTHORIZER")))
 app.include_router(create_identity_router(QUERY_AUTHORIZER))
 DEEPTUTOR_DIR = str(DEEPTUTOR_CONFIG.deeptutor_dir)
 DEEPTUTOR_EXE = str(DEEPTUTOR_CONFIG.executable)
@@ -185,7 +186,13 @@ def get_connection():
 
 # ==============================================================================
 LEARNING_EVIDENCE = LearningEvidenceRepository(get_connection)
-app.include_router(create_quiz_router(QuizRepository(get_connection, LEARNING_EVIDENCE)))
+QUIZ_REPOSITORY = QuizRepository(get_connection, LEARNING_EVIDENCE)
+from verified_learning_repository import VerifiedLearningRepository
+from verified_learning_router import create_verified_learning_router
+VERIFIED_LEARNING = VerifiedLearningRepository(get_connection, QUIZ_REPOSITORY, LEARNING_EVIDENCE)
+app.include_router(create_verified_learning_router(QUERY_AUTHORIZER,VERIFIED_PUBLICATIONS,VERIFIED_LEARNING,
+    GROUNDED_CHAT_SERVICE.orchestrator,GROUNDED_CHAT_SERVICE,RecommendationService(GROUNDED_CHAT_SERVICE.orchestrator)))
+app.include_router(create_quiz_router(QUIZ_REPOSITORY))
 app.include_router(create_learning_router(LEARNING_EVIDENCE))
 app.include_router(create_workflow_router(
     LearningWorkflowRepository(get_connection, LEARNING_EVIDENCE),
@@ -743,7 +750,6 @@ def root():
     return {
         "status": "ok",
         "message": "LMS DeepTutor Backend dang ho?t d?ng",
-        "database": DATABASE,
         "deeptutor_connected": deeptutor_available
     }
 

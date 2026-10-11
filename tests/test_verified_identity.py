@@ -43,3 +43,29 @@ def test_principal_bound_course_visibility(client):
 def test_login_fail_closed(client, token, status):
     r=client.get("/auth/me",headers={} if token is None else {"Authorization": "Bearer "+token})
     assert r.status_code == status and "private-token" not in r.text
+
+
+def test_lecturer_action_boundary_is_live_exact_and_fails_closed(client):
+    from datetime import datetime,timezone
+    from fastapi import Request,HTTPException
+    from deeptutor_integration.auth_contracts import AuthorizationDecision,CacheState,CourseAction
+    from course_query_auth import load_action_authorizer
+    service=MagicMock(); service.kb_name.side_effect=DeepTutorService.kb_name
+    request=Request({"type":"http","headers":[(b"authorization",b"Bearer A")]})
+    access=create_moodle_query_authorizer(service,"https://moodle.test")(request)
+    with pytest.raises(HTTPException) as error: access.scope("INT1339",action=CourseAction.SYNC_COURSE_RESOURCE)
+    assert error.value.status_code==503
+    def evidence(binding,course,action):
+        assert binding.moodle_user_id==1 and course==1
+        return AuthorizationDecision(True,"teacher_permission",course,action,datetime.now(timezone.utc),"fake/live",CacheState.LIVE)
+    access.action_authorizer=evidence
+    assert access.scope("INT1339",action=CourseAction.SYNC_COURSE_RESOURCE).moodle_course_id==1
+    app=FastAPI(); app.include_router(create_identity_router(lambda:access))
+    assert TestClient(app).get("/auth/me").json()["courses"][0]["can_sync"] is True
+    access.action_authorizer=lambda binding,course,action: AuthorizationDecision(True,"cached",course,action,datetime.now(timezone.utc),"fake/cache",CacheState.FRESH_CACHE)
+    with pytest.raises(HTTPException) as error: access.scope("INT1339",action=CourseAction.SYNC_COURSE_RESOURCE)
+    assert error.value.status_code==403
+    access.action_authorizer=load_action_authorizer("missing_module:missing_callable")
+    with pytest.raises(HTTPException) as error: access.scope("INT1339",action=CourseAction.SYNC_COURSE_RESOURCE)
+    assert error.value.status_code==503
+    assert TestClient(app).get("/auth/me").json()["courses"][0]["can_sync"] is False
