@@ -19,6 +19,7 @@ from backend.services.ai.recommendation_service import RecommendationService
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lms-dlu-demo"))
 from grounded_chat_router import create_grounded_chat_router
+from backend.services.ai.learning_context import LearningScope
 from learning_workflow import create_workflow_router
 
 
@@ -146,7 +147,7 @@ def test_recommendation_api_wrapper_binds_requested_scope_without_db():
     repository = SimpleNamespace(evidence=evidence)
     orch = orchestrator(json.dumps({"message": "Try the next topic."}))
     app = FastAPI()
-    app.include_router(create_workflow_router(repository, RecommendationService(orch)))
+    app.include_router(create_workflow_router(repository, RecommendationService(orch), scope_dependency=lambda: LearningScope(owner_id="s1", course_id="c1")))
     result = TestClient(app).get("/courses/c1/recommendations", params={"student_id": "s1", "topic": "Python"}).json()
     evidence.mastery_for.assert_called_once_with("s1", "c1", "Python")
     assert result["student_id"] == "s1" and result["course_id"] == "c1"
