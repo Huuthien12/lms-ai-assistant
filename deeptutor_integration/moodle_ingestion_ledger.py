@@ -42,13 +42,16 @@ class ChunkManifestEntry(BaseModel):
 
 
 class LedgerV2Record(BaseModel):
-    """Immutable source/version evidence; V2 is not wired into production ingestion."""
+    """Immutable source/version evidence backing production ACTIVE publication."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     ledger_schema_version: Literal["moodle-ledger/v2"] = "moodle-ledger/v2"
     moodle_course_id: int | None = Field(default=None, strict=True, ge=1)
     original_filename: str | None = None
+    moodle_resource_id: int | None = Field(default=None,ge=1,strict=True)
+    source_version_hint: str | None = None
+    scope_version: str | None = None
     source_namespace: str = Field(min_length=1, max_length=200)
     course_id: str = Field(min_length=1, max_length=120)
     kb_id: str = Field(min_length=1, max_length=120)
@@ -413,7 +416,7 @@ class MoodleIngestionLedgerV2:
             return self._state()
 
     def publish_replacement(self, record: LedgerV2Record, publication_ref: str,
-                            manifest: tuple[ChunkManifestEntry, ...], *, index_version: str | None = None) -> LedgerV2Record:
+                            manifest: tuple[ChunkManifestEntry, ...], *, index_version: str | None = None, retire_document_ids: tuple[str,...] = ()) -> LedgerV2Record:
         """Publish ready artifacts and retire the old version in one locked write."""
         with self._locked():
             state = self._state()
@@ -431,7 +434,8 @@ class MoodleIngestionLedgerV2:
                 raise DeepTutorError("invalid_ledger_publication", "Publication manifest is invalid.", status_code=502) from None
             records = dict(state.records)
             for old_key, old in records.items():
-                if old.logical_identity() == existing.logical_identity() and old.lifecycle is LedgerV2Lifecycle.ACTIVE:
+                same_scope=(old.source_namespace,old.moodle_course_id,old.course_id,old.kb_id)==(existing.source_namespace,existing.moodle_course_id,existing.course_id,existing.kb_id)
+                if same_scope and (old.logical_identity()==existing.logical_identity() or old.document_id in retire_document_ids) and old.lifecycle is LedgerV2Lifecycle.ACTIVE:
                     records[old_key] = self._replacement(old, lifecycle=LedgerV2Lifecycle.SUPERSEDED, superseded_at=self._now())
             records[key] = published
             self._write(LedgerV2State(records=records))

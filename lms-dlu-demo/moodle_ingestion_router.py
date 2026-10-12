@@ -54,8 +54,8 @@ def create_moodle_ingestion_router(
             kb_id = deeptutor_service.kb_name(course["shortname"])
             statuses = {"ACTIVE": "indexed", "SUPERSEDED": "superseded", "DELETED": "deleted"}
             if publication_service is not None:
-                active={d["document_id"] for d in publication_service.documents(publication_scope(course_id_moodle))}
-                return [{**resource,"sync_status":"indexed" if str(resource["resource_id"]) in active else "not_synced","kb_id":kb_id}
+                active={d["resource_id"] for d in publication_service.documents(publication_scope(course_id_moodle))}
+                return [{**resource,"sync_status":"indexed" if resource["resource_id"] in active else "not_synced","kb_id":kb_id}
                         for resource in moodle_adapter.list_file_resources(course_id_moodle)]
             return [{**resource, "sync_status": statuses.get(ledger.resource_lifecycle(course["shortname"], str(resource["resource_id"])), "not_synced"), "kb_id": kb_id} for resource in moodle_adapter.list_file_resources(course_id_moodle)]
         except DeepTutorError as exc:
@@ -97,7 +97,12 @@ def create_moodle_ingestion_router(
     def retire_resource(course_id: int, resource_id: int):
         if publication_service is None or moodle_adapter is None:
             raise HTTPException(503,detail={"code":"publication_unavailable","message":"Publication is unavailable."})
-        try: return publication_service.delete(publication_scope(course_id),str(resource_id))
+        try:
+            scope=publication_scope(course_id)
+            identifiers=[d["document_id"] for d in publication_service.documents(scope) if d["resource_id"]==resource_id]
+            if not identifiers: identifiers=[str(resource_id)]
+            results=[publication_service.delete(scope,identifier) for identifier in identifiers]
+            return results[0]
         except DeepTutorError as error: raise HTTPException(error.status_code,detail=error.as_dict()) from None
         except Exception: raise HTTPException(503,detail={"code":"moodle_unavailable","message":"Moodle is unavailable."}) from None
 

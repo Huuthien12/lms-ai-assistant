@@ -183,7 +183,9 @@ class TestMoodleAdapter(unittest.TestCase):
 
         # 1 & 2. Kiểm tra normalization thành công và fields chuẩn
         self.assertEqual(source.course_id, "INT1339")
-        self.assertEqual(source.document_id, "1")
+        from deeptutor_integration.moodle_trust import moodle_document_id
+        self.assertEqual(source.document_id, moodle_document_id(self.adapter.base_url, 9, 1))
+        self.assertEqual(source.metadata["moodle_namespace"], self.adapter.base_url)
         self.assertEqual(source.filename, "Chuong1.pdf")
         self.assertEqual(source.mime_type, "application/pdf")
         self.assertEqual(source.source, "moodle")
@@ -199,7 +201,16 @@ class TestMoodleAdapter(unittest.TestCase):
         doc_str = str(source.model_dump())
         self.assertNotIn(self.fake_token, doc_str)
         self.assertNotIn("token=", doc_str)
-        self.assertNotIn("https://fake-moodle", doc_str)
+        self.assertNotIn("file.pdf", doc_str)
+
+    @patch("moodle_adapter.requests.get")
+    def test_multiple_files_fail_before_download(self, mock_get):
+        course, resources = self._source_responses("https://fake-moodle.edu.vn/file.pdf")
+        resources.json.return_value["resources"][0]["contentfiles"] *= 2
+        mock_get.side_effect = [course, resources]
+        with self.assertRaisesRegex(RuntimeError, "Multiple files"):
+            self.adapter.get_source_document(9, 1)
+        self.assertEqual(mock_get.call_count, 2)
 
     @patch("moodle_adapter.requests.get")
     def test_download_uses_wstoken_only_when_explicitly_configured(self, mock_get):

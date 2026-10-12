@@ -18,6 +18,7 @@ from .service import DeepTutorService
 class VerifiedPublicationService:
     def __init__(self, config, adapter=None):
         self.config=config
+        self._receipts={}
         runtime=config.runtime_dir.resolve()
         if not runtime.is_relative_to(config.repository_root.resolve()):
             raise DeepTutorError("invalid_document","Publication runtime must be inside the workspace.",status_code=422)
@@ -29,6 +30,9 @@ class VerifiedPublicationService:
     def publish(self, scope, document):
         if document.course_id.strip().lower()!=scope.course_key.lower():
             raise DeepTutorError("course_access_denied","Document does not belong to the authorized course.",status_code=403)
+        metadata=document.metadata
+        if document.source=="moodle" and (metadata.get("moodle_namespace")!=scope.source_namespace or metadata.get("moodle_course_id")!=scope.moodle_course_id):
+            raise DeepTutorError("source_scope_mismatch","Moodle source scope is invalid.",status_code=403)
         artifact=sha256(document.markdown.encode("utf-8")).hexdigest()
         if document.artifact_sha256 is not None and document.artifact_sha256!=artifact:
             raise DeepTutorError("invalid_document","Document artifact hash is invalid.",status_code=422)
@@ -44,13 +48,14 @@ class VerifiedPublicationService:
             record=LedgerV2Record(source_namespace=scope.source_namespace,moodle_course_id=scope.moodle_course_id,
                 course_id=scope.course_key,kb_id=scope.kb_name,document_id=document.document_id,
                 document_version_id=version,source_sha256=document.sha256,artifact_sha256=artifact,
-                original_filename=document.original_filename,normalizer_version=document.normalizer_version,
+                original_filename=document.original_filename,moodle_resource_id=metadata.get("moodle_resource_id"),
+                source_version_hint=metadata.get("source_version_hint"),scope_version=metadata.get("scope_version"),normalizer_version=document.normalizer_version,
                 index_provider="llamaindex",index_version="unpublished",lifecycle=LedgerV2Lifecycle.PENDING,
                 created_at=self.ledger._now())
             self.ledger.create_pending(record)
             try:
                 path=self.materializer._document_path(DocumentInput(course_id=scope.course_key,
-                    document_id=document.document_id,filename=version+".md",content=document.markdown))
+                    document_id=sha256(document.document_id.encode()).hexdigest(),filename=version+".md",content=document.markdown))
                 result=self.adapter.publish(physical,path)
                 if (not isinstance(result,dict) or result.get("provider")!="llamaindex"
                     or result.get("publication_ref")!=physical or not isinstance(result.get("index_version"),str)
@@ -59,7 +64,8 @@ class VerifiedPublicationService:
                 manifest=tuple(ChunkManifestEntry(chunk_id=c["chunk_id"],
                     source_ref=canonical_source_ref(scope.kb_name,version,c["chunk_id"]),
                     content_sha256=canonical_chunk_sha256(c["content"])) for c in result["chunks"])
-                self.ledger.publish_replacement(record,physical,manifest,index_version=result["index_version"])
+                self.ledger.publish_replacement(record,physical,manifest,index_version=result["index_version"],
+                    retire_document_ids=(str(metadata["moodle_resource_id"]),) if document.source=="moodle" and metadata.get("moodle_resource_id") else ())
                 logger.info("publication_active",extra={"course_key":scope.course_key,"kb_name":scope.kb_name,"document_version_id":version})
             except Exception as error:
                 self.ledger.mark_failed(record,"publication_failed")
@@ -75,7 +81,7 @@ class VerifiedPublicationService:
 
     def documents(self, scope):
         return [{"document_id":r.document_id,"document_version_id":r.document_version_id,
-                 "filename":r.original_filename,"status":"ACTIVE","source_sha256":r.source_sha256}
+                 "filename":r.original_filename,"status":"ACTIVE","source_sha256":r.source_sha256,"resource_id":r.moodle_resource_id}
                 for r in active_records(self.ledger.snapshot(),scope)]
 
     @contextmanager
@@ -93,7 +99,25 @@ class VerifiedPublicationService:
                 chunks.extend(verify_raw_chunks(record,scope,raw))
             context=build_context(scope,question,chunks)
             logger.info("verified_context",extra={"owner_ref":scope.owner_ref,"course_key":scope.course_key,"kb_name":scope.kb_name,"context_id":context.context_id,"chunk_count":len(context.chunks)})
-            yield context
+            self._receipts[context.context_id]=context
+            try: yield context
+            finally: self._receipts.pop(context.context_id,None)
+
+    @staticmethod
+    def learning_context(context):
+        from backend.services.ai.learning_context import LearningScope,LearningSource,VerifiedLearningContext
+        return VerifiedLearningContext(scope=LearningScope(owner_id=context.scope.owner_ref,course_id=context.scope.course_key),
+            kb_id=context.scope.kb_name,retrieval_id=context.context_id,text=context.text(),sources=tuple(
+                LearningSource(source_id=c.source_ref,chunk_id=c.chunk_id,document_id=c.document_id,
+                    version=c.document_version_id,content_hash=c.content_sha256,provenance_status="verified") for c in context.chunks))
+
+    def validate_learning_context(self, scope, context, access):
+        issued=self._receipts.get(context.retrieval_id)
+        if issued is None or self.learning_context(issued)!=context or context.scope!=scope:
+            raise DeepTutorError("unissued_context","Learning context receipt is invalid.",status_code=409)
+        access.reauthorize(issued.scope)
+        self.revalidate(issued)
+        return True
 
     def revalidate(self, context):
         records=active_records(self.ledger._state(),context.scope)

@@ -5,6 +5,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from deeptutor_integration.contracts import SourceDocument
+from deeptutor_integration.moodle_trust import moodle_document_id
 
 load_dotenv()
 
@@ -196,14 +197,10 @@ class MoodleAdapter:
             if str(res.get("id")) == str(resource_id):
                 contentfiles = res.get("contentfiles", [])
                 if isinstance(contentfiles, list):
-                    target_file = next(
-                        (
-                            item for item in contentfiles
-                            if isinstance(item, dict)
-                            and item.get("fileurl")
-                        ),
-                        None,
-                    )
+                    files = [item for item in contentfiles if isinstance(item, dict) and item.get("fileurl")]
+                    if len(files) > 1:
+                        raise RuntimeError("Multiple files require the personal Moodle sync flow.")
+                    target_file = files[0] if files else None
                 break
 
         if not target_file:
@@ -232,18 +229,19 @@ class MoodleAdapter:
 
         return SourceDocument(
             course_id=str(course_info.get("shortname", course_id_moodle)),
-            document_id=str(resource_id),
+            document_id=moodle_document_id(self.base_url.rstrip("/"), int(course_id_moodle), int(resource_id)),
             filename=filename,
             mime_type=target_file.get("mimetype") or content_type.split(";", 1)[0] or "application/octet-stream",
             source="moodle",
             metadata={
                 "course_name": course_info.get("fullname", ""),
                 "moodle_file_size": target_file.get("filesize", 0),
-                "moodle_course_id": course_info.get("id"),
+                "moodle_course_id": int(course_id_moodle),
+                "moodle_namespace": self.base_url.rstrip("/"),
                 "moodle_resource_id": int(resource_id),
                 # Moodle's value is an upstream hint only; ``content_hash`` is
                 # independently derived from the downloaded bytes.
-                "source_version_hint": target_file.get("timemodified") or target_file.get("contenthash"),
+                "source_version_hint": str(target_file["timemodified"]) if target_file.get("timemodified") is not None else None,
             },
             content=content,
         )
