@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 import httpx
+import requests
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -17,13 +18,13 @@ def client(monkeypatch):
     service.kb_name.side_effect = DeepTutorService.kb_name
     def transport(url, **kw):
         token = kw["data"]["wstoken"]
-        if token == "down": raise httpx.ConnectError("private-token")
+        if token == "down": raise requests.ConnectionError("private-token")
         uid = {"A": 1, "B": 2}.get(token)
         if not uid: return httpx.Response(200, json={"errorcode": "invalidtoken"})
         if kw["data"]["wsfunction"] == "core_webservice_get_site_info":
-            return httpx.Response(200, json={"userid": uid})
+            return httpx.Response(200, json={"userid": uid,"siteurl":"https://moodle.test","functions":[{"name":"core_enrol_get_users_courses"}]})
         return httpx.Response(200, json=[{"id": uid, "shortname": "INT1339" if uid == 1 else "INT2001"}])
-    monkeypatch.setattr("course_query_auth.httpx.post", transport)
+    monkeypatch.setattr("deeptutor_integration.moodle_trust.requests.post", transport)
     app = FastAPI(); app.include_router(create_identity_router(create_moodle_query_authorizer(service, "https://moodle.test")))
     return TestClient(app)
 
@@ -46,26 +47,23 @@ def test_login_fail_closed(client, token, status):
 
 
 def test_lecturer_action_boundary_is_live_exact_and_fails_closed(client):
-    from datetime import datetime,timezone
     from fastapi import Request,HTTPException
-    from deeptutor_integration.auth_contracts import AuthorizationDecision,CacheState,CourseAction
-    from course_query_auth import load_action_authorizer
+    from deeptutor_integration.auth_contracts import CourseAction,MoodleAuthorizationUnavailableError
     service=MagicMock(); service.kb_name.side_effect=DeepTutorService.kb_name
     request=Request({"type":"http","headers":[(b"authorization",b"Bearer A")]})
     access=create_moodle_query_authorizer(service,"https://moodle.test")(request)
     with pytest.raises(HTTPException) as error: access.scope("INT1339",action=CourseAction.SYNC_COURSE_RESOURCE)
     assert error.value.status_code==503
-    def evidence(binding,course,action):
-        assert binding.moodle_user_id==1 and course==1
-        return AuthorizationDecision(True,"teacher_permission",course,action,datetime.now(timezone.utc),"fake/live",CacheState.LIVE)
-    access.action_authorizer=evidence
+    evidence=MagicMock(); evidence.allows.return_value=True
+    access.boundary.capability_evidence=evidence
     assert access.scope("INT1339",action=CourseAction.SYNC_COURSE_RESOURCE).moodle_course_id==1
+    evidence.allows.assert_called_with(1,1,"moodle/course:manageactivities")
     app=FastAPI(); app.include_router(create_identity_router(lambda:access))
     assert TestClient(app).get("/auth/me").json()["courses"][0]["can_sync"] is True
-    access.action_authorizer=lambda binding,course,action: AuthorizationDecision(True,"cached",course,action,datetime.now(timezone.utc),"fake/cache",CacheState.FRESH_CACHE)
+    evidence.allows.return_value=False
     with pytest.raises(HTTPException) as error: access.scope("INT1339",action=CourseAction.SYNC_COURSE_RESOURCE)
     assert error.value.status_code==403
-    access.action_authorizer=load_action_authorizer("missing_module:missing_callable")
+    evidence.allows.side_effect=MoodleAuthorizationUnavailableError()
     with pytest.raises(HTTPException) as error: access.scope("INT1339",action=CourseAction.SYNC_COURSE_RESOURCE)
     assert error.value.status_code==503
     assert TestClient(app).get("/auth/me").json()["courses"][0]["can_sync"] is False

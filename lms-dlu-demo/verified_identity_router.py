@@ -13,7 +13,7 @@ def create_identity_router(authorizer):
         for course in access.courses():
             scope=access.scope(course["id"])
             can_sync=False
-            if access.action_authorizer is not None:
+            if access.boundary.capability_evidence is not None:
                 try: access.scope(course["id"],action=CourseAction.SYNC_COURSE_RESOURCE); can_sync=True
                 except HTTPException: pass
             courses.append({**asdict(scope),"can_sync":can_sync})

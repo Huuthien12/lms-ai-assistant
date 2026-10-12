@@ -17,6 +17,12 @@ from deeptutor_integration.moodle_trust import (
 )
 
 
+@pytest.fixture(autouse=True)
+def fake_file_transport(monkeypatch):
+    # One fake records POST REST and GET file calls in their original sequence.
+    monkeypatch.setattr("deeptutor_integration.moodle_trust.requests.get",lambda *a,**k:requests.post(*a,**k))
+
+
 BASE = "https://moodle.example"
 PERSON_A = "personal-A-secret"
 PERSON_B = "personal-B-secret"
@@ -66,7 +72,7 @@ def file(name="chapter.pdf", *, content_time=100):
 DOC_ID = moodle_document_id(BASE, 101, 7)
 
 
-@patch("deeptutor_integration.moodle_trust.requests.get")
+@patch("deeptutor_integration.moodle_trust.requests.post")
 def test_two_users_two_courses_and_cross_course_denial(mock_get):
     mock_get.side_effect = [result(site(11)), result([course(101, "A")]),
                             result(site(22)), result([course(202, "B")]),
@@ -80,10 +86,10 @@ def test_two_users_two_courses_and_cross_course_denial(mock_get):
     with pytest.raises(CourseAccessDeniedError):
         trust.authorize(PERSON_A, 202, CourseAction.QUERY_COURSE)
     assert len(mock_get.call_args_list) == 6
-    assert all("wstoken" in call.kwargs["params"] for call in mock_get.call_args_list)
+    assert all("wstoken" in call.kwargs["data"] for call in mock_get.call_args_list)
 
 
-@patch("deeptutor_integration.moodle_trust.requests.get")
+@patch("deeptutor_integration.moodle_trust.requests.post")
 def test_invalid_missing_malformed_and_timeout_fail_before_discovery(mock_get):
     trust = boundary(Evidence())
     with pytest.raises(PrincipalRequiredError):
@@ -103,7 +109,7 @@ def test_invalid_missing_malformed_and_timeout_fail_before_discovery(mock_get):
     assert mock_get.call_count == 3
 
 
-@patch("deeptutor_integration.moodle_trust.requests.get")
+@patch("deeptutor_integration.moodle_trust.requests.post")
 def test_ambiguous_course_or_missing_server_mapping_fails_closed(mock_get):
     mock_get.side_effect = [result(site(11)), result([course(101, "A"), course(202, "A")]),
                             result(site(11)), result([course(101, "A")])]
@@ -114,7 +120,7 @@ def test_ambiguous_course_or_missing_server_mapping_fails_closed(mock_get):
         no_mapping.authorize(PERSON_A, 101, CourseAction.QUERY_COURSE)
 
 
-@patch("deeptutor_integration.moodle_trust.requests.get")
+@patch("deeptutor_integration.moodle_trust.requests.post")
 def test_lecturer_evidence_precedes_resource_discovery(mock_get):
     evidence = Evidence(allowed_users=(11,))
     mock_get.side_effect = [result(site(11)), result([course(101, "A")]),
@@ -128,7 +134,7 @@ def test_lecturer_evidence_precedes_resource_discovery(mock_get):
     assert mock_get.call_count == 4
 
 
-@patch("deeptutor_integration.moodle_trust.requests.get")
+@patch("deeptutor_integration.moodle_trust.requests.post")
 def test_authorized_pdf_update_and_rename_keep_source_identity(mock_get):
     evidence = Evidence()
     mock_get.side_effect = [
@@ -175,7 +181,7 @@ def test_bearer_parsing_and_ambiguous_kb_mapping():
         MoodleTrustBoundary(BASE, kb_by_course_id={101: "shared-kb", 202: "shared-kb"})
 
 
-@patch("deeptutor_integration.moodle_trust.requests.get")
+@patch("deeptutor_integration.moodle_trust.requests.post")
 def test_wrong_site_same_origin_and_forbidden_function_fail_closed(mock_get):
     mock_get.side_effect = [result({**site(11), "siteurl": BASE + "/other"}),
                             result({"exception": "required_capability_exception", "errorcode": "accessexception"})]
@@ -185,21 +191,21 @@ def test_wrong_site_same_origin_and_forbidden_function_fail_closed(mock_get):
         boundary().verify_credential(PERSON_A)
 
 
-@patch("deeptutor_integration.moodle_trust.requests.get")
+@patch("deeptutor_integration.moodle_trust.requests.post")
 def test_core_capability_evidence_targets_verified_user_and_active_enrolment(mock_get):
     mock_get.return_value = result([{"courseid": 101, "capability": "moodle/course:manageactivities",
                                      "users": [{"id": 11}]}])
     evidence = MoodleCoreCapabilityEvidence(MoodleRest(BASE), SERVICE)
     assert evidence.allows(11, 101, "moodle/course:manageactivities")
     assert not evidence.allows(22, 101, "moodle/course:manageactivities")
-    params = mock_get.call_args.kwargs["params"]
+    params = mock_get.call_args.kwargs["data"]
     assert params["wstoken"] == SERVICE
     assert params["options[0][name]"] == "onlyactive"
     assert params["options[0][value]"] == 1
     assert params["coursecapabilities[0][courseid]"] == 101
 
 
-@patch("deeptutor_integration.moodle_trust.requests.get")
+@patch("deeptutor_integration.moodle_trust.requests.post")
 def test_unsafe_discovery_url_never_downloads(mock_get):
     mock_get.side_effect = [result(site(11)), result([course(101, "A")]),
                             result(resources({**file(), "fileurl": "https://evil.example/x"}))]
@@ -208,7 +214,7 @@ def test_unsafe_discovery_url_never_downloads(mock_get):
     assert mock_get.call_count == 3
 
 
-@patch("deeptutor_integration.moodle_trust.requests.get")
+@patch("deeptutor_integration.moodle_trust.requests.post")
 def test_complete_empty_scan_produces_delete_signal(mock_get):
     mock_get.side_effect = [result(site(11)), result([course(101, "A")]), result({"resources": []}),
                             result(site(11)), result([course(101, "A")]), result({"resources": []})]
@@ -220,7 +226,7 @@ def test_complete_empty_scan_produces_delete_signal(mock_get):
                              course_id=context.scope.moodle_course_id)[0].kind == "TOMBSTONE"
 
 
-@patch("deeptutor_integration.moodle_trust.requests.get")
+@patch("deeptutor_integration.moodle_trust.requests.post")
 def test_scan_fails_when_discovery_changes_during_download(mock_get):
     mock_get.side_effect = [result(site(11)), result([course(101, "A")]), result(resources(file())),
                             result(content=b"%PDF-first"),
@@ -236,7 +242,7 @@ def test_scan_fails_when_discovery_changes_during_download(mock_get):
     f"https://user:secret@moodle.example/webservice/pluginfile.php/1/file.pdf",
     f"{BASE}/private/file.pdf",
 ])
-@patch("deeptutor_integration.moodle_trust.requests.get")
+@patch("deeptutor_integration.moodle_trust.requests.post")
 def test_untrusted_file_locator_is_rejected_before_download(mock_get, bad_url):
     mock_get.side_effect = [result(site(11)), result([course(101, "A")]),
                             result(resources({**file(), "fileurl": bad_url}))]
@@ -245,7 +251,7 @@ def test_untrusted_file_locator_is_rejected_before_download(mock_get, bad_url):
     assert mock_get.call_count == 3
 
 
-@patch("deeptutor_integration.moodle_trust.requests.get")
+@patch("deeptutor_integration.moodle_trust.requests.post")
 def test_redirect_and_oversized_download_fail_closed(mock_get):
     trust = MoodleTrustBoundary(BASE, kb_by_course_id={101: "kb-a"},
                                 capability_evidence=Evidence(), max_file_bytes=8)
@@ -260,7 +266,7 @@ def test_redirect_and_oversized_download_fail_closed(mock_get):
     assert mock_get.call_args_list[3].kwargs["allow_redirects"] is False
 
 
-@patch("deeptutor_integration.moodle_trust.requests.get")
+@patch("deeptutor_integration.moodle_trust.requests.post")
 def test_multi_file_without_stable_file_ids_is_unavailable(mock_get):
     mock_get.side_effect = [result(site(11)), result([course(101, "A")]),
                             result(resources(file("first.pdf"), file("second.pdf")))]

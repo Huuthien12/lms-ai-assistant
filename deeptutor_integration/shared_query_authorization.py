@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from hashlib import sha256
 from typing import Any, Protocol
 
 from deeptutor_integration.auth_contracts import (
@@ -38,6 +39,11 @@ class CanonicalCourseScope:
     canonical_course_key: str
     kb_id: str
     scope_version: str
+
+    @classmethod
+    def create(cls, namespace, numeric_id, course_key, kb_id):
+        version=sha256(f"{namespace}\0{numeric_id}\0{course_key}\0{kb_id}".encode()).hexdigest()
+        return cls(namespace,numeric_id,course_key,kb_id,version)
 
     def __post_init__(self) -> None:
         _nonempty(self.moodle_namespace, "moodle_namespace")

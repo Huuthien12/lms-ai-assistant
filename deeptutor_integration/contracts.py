@@ -134,3 +134,12 @@ class AuthorizedCourseScope:
     kb_name: str
     owner_ref: str
     source_namespace: str
+
+    @property
+    def canonical_scope(self):
+        # Compatibility view; the shared Moodle canonical scope owns its version.
+        from .shared_query_authorization import CanonicalCourseScope
+        return CanonicalCourseScope.create(self.source_namespace,self.moodle_course_id,self.course_key,self.kb_name)
+
+    @property
+    def scope_version(self): return self.canonical_scope.scope_version

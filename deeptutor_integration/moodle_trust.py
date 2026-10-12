@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Mapping, Protocol
+from typing import Any, Mapping, Protocol, Callable
 from urllib.parse import urlsplit
 
 import requests
@@ -70,9 +70,9 @@ class MoodleRest:
             raise PrincipalRequiredError()
         failure: type[Exception] | None = None
         try:
-            response = requests.get(
+            response = requests.post(
                 self.endpoint,
-                params={**params, "wstoken": token, "wsfunction": function, "moodlewsrestformat": "json"},
+                data={**params, "wstoken": token, "wsfunction": function, "moodlewsrestformat": "json"},
                 timeout=self.timeout,
                 allow_redirects=False,
             )
@@ -88,7 +88,7 @@ class MoodleRest:
             return data
         except PrincipalRequiredError:
             failure = PrincipalRequiredError
-        except (requests.RequestException, ValueError, MoodleAuthorizationUnavailableError):
+        except (requests.RequestException, ValueError, TypeError, MoodleAuthorizationUnavailableError):
             failure = MoodleAuthorizationUnavailableError
         # Leave the handler before raising to avoid retaining credential-bearing
         # request URLs in public exception context/tracebacks.
@@ -243,7 +243,8 @@ class MoodleTrustBoundary:
         self,
         base_url: str,
         *,
-        kb_by_course_id: Mapping[int, str],
+        kb_by_course_id: Mapping[int, str] | None = None,
+        course_kb_resolver: Callable[[str], str] | None = None,
         capability_evidence: CapabilityEvidence | None = None,
         sync_capability: str = "moodle/course:manageactivities",
         file_credential_parameter: str = "token",
@@ -255,7 +256,8 @@ class MoodleTrustBoundary:
             raise ValueError("max_file_bytes must be positive")
         self.rest = MoodleRest(base_url)
         self.namespace = self.rest.base_url
-        self.kb_by_course_id = dict(kb_by_course_id)
+        self.kb_by_course_id = dict(kb_by_course_id or {})
+        self.course_kb_resolver = course_kb_resolver
         if (any(type(key) is not int or key <= 0 or not isinstance(value, str) or not value.strip()
                 for key, value in self.kb_by_course_id.items()) or
                 len(set(self.kb_by_course_id.values())) != len(self.kb_by_course_id)):
@@ -311,11 +313,15 @@ class MoodleTrustBoundary:
             identity = _positive_id(row.get("id"))
             shortname = row.get("shortname")
             if (not isinstance(shortname, str) or not shortname.strip() or
-                    identity in courses or shortname in names):
+                    identity in courses or shortname.strip().casefold() in names):
                 raise MoodleAuthorizationUnavailableError()
             courses[identity] = row
-            names.add(shortname)
+            names.add(shortname.strip().casefold())
         return courses
+
+    def enrolled_courses(self, token):
+        principal,binding=self._identity(token)
+        return principal,binding,list(self._courses(token,binding.moodle_user_id).values())
 
     def authorize(self, token: str, selector: int | str, action: CourseAction) -> AuthorizedMoodleCourse:
         if not isinstance(action, CourseAction) or type(selector) not in {int, str}:
@@ -324,21 +330,22 @@ class MoodleTrustBoundary:
         courses = self._courses(token, binding.moodle_user_id)
         matches = [row for row in courses.values() if
                    (type(selector) is int and row["id"] == selector) or
-                   (type(selector) is str and row["shortname"] == selector)]
+                   (type(selector) is str and row["shortname"].strip().casefold() == selector.strip().casefold())]
         if len(matches) != 1:
             raise CourseAccessDeniedError()
         course = matches[0]
         course_id = course["id"]
-        kb_id = self.kb_by_course_id.get(course_id)
-        if not isinstance(kb_id, str) or not kb_id.strip():
-            raise MoodleAuthorizationUnavailableError()
-        scope = CanonicalCourseScope(
-            moodle_namespace=self.namespace, moodle_course_id=course_id,
-            canonical_course_key=course["shortname"], kb_id=kb_id,
-            scope_version=hashlib.sha256(
-                f"{self.namespace}\0{course_id}\0{course['shortname']}\0{kb_id}".encode()
-            ).hexdigest(),
-        )
+        mapping=dict(self.kb_by_course_id)
+        if self.course_kb_resolver is not None:
+            try:
+                for row in courses.values():
+                    mapping.setdefault(row["id"],self.course_kb_resolver(row["shortname"].strip()))
+            except Exception:
+                raise MoodleAuthorizationUnavailableError() from None
+        if len(set(mapping.values()))!=len(mapping): raise MoodleAuthorizationUnavailableError()
+        kb_id=mapping.get(course_id)
+        if not isinstance(kb_id,str) or not kb_id.strip(): raise MoodleAuthorizationUnavailableError()
+        scope=CanonicalCourseScope.create(self.namespace,course_id,course["shortname"].strip(),kb_id)
 
         def bound_authorizer(_: MoodleUserBinding, numeric_id: int, requested: CourseAction) -> AuthorizationDecision:
             allowed = numeric_id == course_id and requested is CourseAction.QUERY_COURSE
@@ -346,6 +353,7 @@ class MoodleTrustBoundary:
                 if self.capability_evidence is None:
                     raise MoodleAuthorizationUnavailableError()
                 allowed = self.capability_evidence.allows(binding.moodle_user_id, course_id, self.sync_capability)
+                if type(allowed) is not bool: raise MoodleAuthorizationUnavailableError()
             return AuthorizationDecision(
                 allowed=allowed, reason_code="moodle_live_evidence" if allowed else "moodle_capability_denied",
                 moodle_course_id=numeric_id, action=requested,
@@ -491,7 +499,7 @@ class MoodleTrustBoundary:
                     "scope_version": context.scope.scope_version,
                 },
             )
-        except (requests.RequestException, ValueError, MoodleAuthorizationUnavailableError):
+        except (requests.RequestException, ValueError, TypeError, MoodleAuthorizationUnavailableError):
             failure = MoodleAuthorizationUnavailableError
         finally:
             if "response" in locals():

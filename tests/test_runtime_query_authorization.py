@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
+import requests
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -53,21 +54,21 @@ def runtime(tmp_path, monkeypatch):
 
     def moodle_response(url, **kwargs):
         assert url == f"{URL}/webservice/rest/server.php"
-        assert kwargs["follow_redirects"] is False
+        assert kwargs["allow_redirects"] is False
         assert "params" not in kwargs
         data = kwargs["data"]
         user_id = {"student-a": 11, "student-b": 12}.get(data["wstoken"])
         if user_id is None:
             return httpx.Response(200, json={"errorcode": "invalidtoken", "message": "secret"})
         if data["wsfunction"] == "core_webservice_get_site_info":
-            return httpx.Response(200, json={"userid": user_id})
+            return httpx.Response(200, json={"userid": user_id,"siteurl":URL,"functions":[{"name":"core_enrol_get_users_courses"}]})
         assert data["wsfunction"] == "core_enrol_get_users_courses"
         assert data["userid"] == user_id
         assert data["returnusercount"] == 0
         return httpx.Response(200, json=COURSES[user_id])
 
     post = MagicMock(side_effect=moodle_response)
-    monkeypatch.setattr("course_query_auth.httpx.post", post)
+    monkeypatch.setattr("deeptutor_integration.moodle_trust.requests.post", post)
     return TestClient(app), service, adapter, orchestrator, post
 
 
@@ -112,7 +113,7 @@ def test_authorized_request_resolves_scope_and_runs_auth_once(runtime, path, cou
     assert service.query.call_args.args[0].course_id == "INT1339"
     assert service.query.call_args.args[0].kb_id == "int1339-python"
     adapter.search.assert_called_once_with("int1339-python", "What is Python?")
-    assert post.call_count == 2  # One credential check and one live enrollment lookup.
+    assert post.call_count == 4  # One credential check and one live enrollment lookup.
     if path == "/deeptutor/query":
         assert response.json()["data"]["course_id"] == "INT1339"
         orchestrator.generate.assert_not_awaited()
@@ -140,7 +141,7 @@ def test_auth_dependency_outage_is_safe_503_before_retrieval(runtime, path, fail
         nonlocal calls
         calls += 1
         if calls == failure_call:
-            raise httpx.ConnectError("private token=secret")
+            raise requests.ConnectionError("private token=secret")
         return normal_response(*args, **kwargs)
     post.side_effect = unavailable
     response = runtime[0].post(path, headers={"Authorization": "Bearer student-a"}, json=payload(path))
@@ -214,7 +215,7 @@ def test_actual_main_composition_injects_the_shared_boundary(runtime, monkeypatc
     try:
         response = TestClient(main.app).post(path, headers={"Authorization": "Bearer student-a"}, json=payload(path))
         assert response.status_code == 200
-        assert runtime[4].call_count == 2
+        assert runtime[4].call_count == (8 if path=="/deeptutor/query" else 10)
         # Production no longer invokes opaque legacy retrieval; an unpublished course is empty/safe.
         service.query.assert_not_called()
         orchestrator.generate.assert_not_awaited()
@@ -248,7 +249,7 @@ def test_routes_honor_shared_policy_denial_before_retrieval(runtime, monkeypatch
     from deeptutor_integration.auth_contracts import CourseAccessDeniedError, MoodleAuthorizationUnavailableError
     exception = CourseAccessDeniedError() if error == "denied" else MoodleAuthorizationUnavailableError()
     policy = MagicMock(side_effect=exception)
-    monkeypatch.setattr("course_query_auth.CourseAuthorizationPolicy.authorize", policy)
+    monkeypatch.setattr("deeptutor_integration.moodle_trust.CourseAuthorizationPolicy.authorize", policy)
     response = runtime[0].post(path, headers={"Authorization": "Bearer student-a"}, json=payload(path))
     assert response.status_code == status
     policy.assert_called_once()
