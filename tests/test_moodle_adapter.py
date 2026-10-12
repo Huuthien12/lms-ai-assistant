@@ -3,6 +3,7 @@ from unittest.mock import patch, MagicMock
 import sys
 import os
 import traceback
+import hashlib
 
 # Cho phép import MoodleAdapter từ thư mục lms-dlu-demo
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'lms-dlu-demo')))
@@ -43,6 +44,31 @@ class TestMoodleAdapter(unittest.TestCase):
         self.assertEqual(self.adapter._call_ws("core_course_get_enrolled_courses_by_timeline_classification"), {"courses": []})
         self.assertEqual(mock_get.call_args.kwargs["timeout"], 15)
         self.assertEqual(mock_get.call_args.kwargs["params"]["wstoken"], self.fake_token)
+
+    def test_file_credential_transport_is_allowlisted(self):
+        adapter = MoodleAdapter(
+            base_url="https://fake-moodle.edu.vn",
+            token=self.fake_token,
+            file_credential_parameter="wstoken",
+        )
+        self.assertEqual(adapter.file_credential_parameter, "wstoken")
+        with self.assertRaisesRegex(ValueError, "not configured safely"):
+            MoodleAdapter(
+                base_url="https://fake-moodle.edu.vn",
+                token=self.fake_token,
+                file_credential_parameter="authorization",
+            )
+
+    def test_rejects_credential_bearing_or_non_http_base_url(self):
+        for base_url in (
+            f"https://fake-moodle.edu.vn/?wstoken={self.fake_token}",
+            f"https://user:{self.fake_token}@fake-moodle.edu.vn",
+            "ftp://fake-moodle.edu.vn",
+        ):
+            with self.subTest(base_url=base_url):
+                with self.assertRaisesRegex(ValueError, "not configured safely") as raised:
+                    MoodleAdapter(base_url=base_url, token=self.fake_token)
+                self.assertNotIn(self.fake_token, str(raised.exception))
 
     @patch("moodle_adapter.requests.get")
     def test_rest_transport_failure_is_redacted_from_exception_context_and_traceback(self, mock_get):
@@ -161,6 +187,7 @@ class TestMoodleAdapter(unittest.TestCase):
         self.assertEqual(source.filename, "Chuong1.pdf")
         self.assertEqual(source.mime_type, "application/pdf")
         self.assertEqual(source.source, "moodle")
+        self.assertEqual(source.content_hash, hashlib.sha256(source.content).hexdigest())
 
         # 3. PDF bytes được trả riêng
         self.assertEqual(source.content, b"%PDF-1.4 FAKE PDF CONTENT")
@@ -173,6 +200,21 @@ class TestMoodleAdapter(unittest.TestCase):
         self.assertNotIn(self.fake_token, doc_str)
         self.assertNotIn("token=", doc_str)
         self.assertNotIn("https://fake-moodle", doc_str)
+
+    @patch("moodle_adapter.requests.get")
+    def test_download_uses_wstoken_only_when_explicitly_configured(self, mock_get):
+        adapter = MoodleAdapter(
+            base_url="https://fake-moodle.edu.vn",
+            token=self.fake_token,
+            file_credential_parameter="wstoken",
+        )
+        course, resources = self._source_responses("https://fake-moodle.edu.vn/file.pdf")
+        response = MagicMock(status_code=200, content=b"%PDF-1.4 payload", headers={"Content-Type": "application/pdf"})
+        mock_get.side_effect = [course, resources, response]
+
+        adapter.get_source_document(9, 1)
+
+        self.assertEqual(mock_get.call_args_list[2].kwargs["params"], {"wstoken": self.fake_token})
 
     @patch("moodle_adapter.requests.get")
     def test_missing_resource(self, mock_get):

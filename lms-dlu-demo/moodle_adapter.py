@@ -9,12 +9,41 @@ from deeptutor_integration.contracts import SourceDocument
 load_dotenv()
 
 class MoodleAdapter:
-    def __init__(self, base_url: str = None, token: str = None):
+    _FILE_CREDENTIAL_PARAMETERS = frozenset({"token", "wstoken"})
+
+    def __init__(
+        self,
+        base_url: str = None,
+        token: str = None,
+        file_credential_parameter: str | None = None,
+    ):
         self.base_url = base_url or os.getenv("MOODLE_BASE_URL")
         self.token = token or os.getenv("MOODLE_TOKEN")
+        self.file_credential_parameter = (
+            file_credential_parameter
+            or os.getenv("MOODLE_FILE_CREDENTIAL_PARAMETER", "token")
+        )
 
         if not self.base_url or not self.token:
             raise ValueError("MOODLE_BASE_URL và MOODLE_TOKEN phải được cấu hình.")
+        if self.file_credential_parameter not in self._FILE_CREDENTIAL_PARAMETERS:
+            raise ValueError("Moodle file credential transport is not configured safely.")
+
+        # The REST credential must only be sent in the request parameter below,
+        # never embedded in the configured endpoint itself.
+        try:
+            base = urlsplit(self.base_url)
+            if (
+                base.scheme not in {"http", "https"}
+                or not base.hostname
+                or base.username
+                or base.password
+                or base.query
+                or base.fragment
+            ):
+                raise ValueError
+        except (TypeError, ValueError):
+            raise ValueError("MOODLE_BASE_URL is not configured safely.") from None
 
         self.rest_endpoint = f"{self.base_url.rstrip('/')}/webservice/rest/server.php"
 
@@ -45,7 +74,10 @@ class MoodleAdapter:
         try:
             response = requests.get(
                 fileurl,
-                params={"token": self.token},
+                # Moodle's REST endpoint uses ``wstoken``.  File URLs commonly
+                # use ``token`` (pluginfile); deployments that expose a
+                # web-service file transport can explicitly opt into wstoken.
+                params={self.file_credential_parameter: self.token},
                 timeout=30,
                 allow_redirects=False,
             )
@@ -206,7 +238,12 @@ class MoodleAdapter:
             source="moodle",
             metadata={
                 "course_name": course_info.get("fullname", ""),
-                "moodle_file_size": target_file.get("filesize", 0)
+                "moodle_file_size": target_file.get("filesize", 0),
+                "moodle_course_id": course_info.get("id"),
+                "moodle_resource_id": int(resource_id),
+                # Moodle's value is an upstream hint only; ``content_hash`` is
+                # independently derived from the downloaded bytes.
+                "source_version_hint": target_file.get("timemodified") or target_file.get("contenthash"),
             },
             content=content,
         )

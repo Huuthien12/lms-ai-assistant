@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -46,11 +47,18 @@ class SourceDocument(_SourceMetadata):
     mime_type: str = Field(min_length=1, max_length=200)
     source: str = Field(default="unknown", min_length=1, max_length=120)
     content: bytes = Field(min_length=1)
+    content_hash: str = Field(default="", pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
     def filename_is_basename(self) -> "SourceDocument":
         if Path(self.filename).name != self.filename:
             raise ValueError("filename must not contain a directory path")
+        calculated_hash = hashlib.sha256(self.content).hexdigest()
+        if self.content_hash and self.content_hash != calculated_hash:
+            raise ValueError("content_hash must match content")
+        # The hash is derived at the boundary so downstream callers never need
+        # to treat a Moodle version hint as a content version.
+        object.__setattr__(self, "content_hash", calculated_hash)
         return self
 
 
