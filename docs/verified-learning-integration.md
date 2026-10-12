@@ -1,128 +1,171 @@
-# Verified learning integration decisions
+# Final verified learning integration
 
-Baseline: project-main a3ae2e2c6d92b44692143c54a31383841b8bb0f8 (merged #32, #33, #34).
+Integration base: project-main `a3ae2e2c6d92b44692143c54a31383841b8bb0f8`.
+Actual source histories are preserved: Thiện PR #35 `0edf2aa1eca53ef221751af4b6567e535963a272`,
+Thọ `40623b9bd270223f98e24a8d72d67d69a23a8c51`, Quân `ef426c35e1a626421ca7a757c30bcccf0c6be012`.
+No handoff report was used to reconstruct an implementation. The integration branch
+is `integration/final-team-acceptance`; project-main is not merged or rewritten.
 
-## Identity and scope
+## One authority per decision
 
-The existing personal Moodle Bearer dependency now returns request-local callable
-MoodleQueryAccess. Query callers retain their existing interface. Identity UI uses
-/auth/me and only receives enrolled server-resolved scopes. Owner references hash
-issuer plus subject; credentials remain request/session memory only. No shared
-integration token is accepted as a user credential. Numeric Moodle IDs, aliases,
-and logical KB IDs are kept separately in AuthorizedCourseScope.
+`MoodleTrustBoundary` is the personal identity, enrollment and exact capability
+boundary. `CourseAuthorizationPolicy` remains the sole policy. The HTTP
+`MoodleQueryAccess` only projects verified results and provides fresh reauthorization;
+it no longer independently calls Moodle, constructs principals or grants writes.
+Personal REST calls use POST form data and reject redirects. Personal tokens remain
+request/Streamlit session memory, never principals, persisted contexts or logs.
+Known configured operator/capability credentials are rejected before user verification.
 
-CourseAuthorizationPolicy remains the only policy. Non-query sync decisions require
-Tho's injected action authorizer; missing action evidence fails closed. Enrollment
-alone does not authorize lecturer writes.
+`CanonicalCourseScope` binds Moodle namespace, numeric course ID, server-resolved
+alias, logical KB and scope version. `AuthorizedCourseScope` retains its persisted
+PR35 fields as a compatibility projection of that scope. The existing
+`DeepTutorService.kb_name` is the only application Course → KB resolver; its output
+is bound to the live numeric Moodle course. Duplicate aliases/KB mappings fail
+closed. Student selectors and provider metadata cannot establish scope or identity.
+Owner refs preserve the PR35 SHA-256(namespace + NUL + numeric Moodle user ID)
+formula across the new prefixed Moodle principal issuer.
 
-## Retrieval boundary under audit
+Lecturer writes require fresh `moodle/course:manageactivities` capability evidence
+for the verified user and numeric course, including active enrollment. Configure
+`MOODLE_CAPABILITY_SERVICE_TOKEN` for Moodle's
+`core_enrol_get_enrolled_users_with_capability`; its credential is separate from
+personal tokens. Missing/unavailable evidence yields 503, denied evidence 403,
+before resource discovery/download. The former
+`LMS_COURSE_ACTION_AUTHORIZER=module:function` hook is superseded by this actual
+Thọ implementation. Student query access does not need the capability credential.
 
-The current DeepTutor LlamaIndex source serializer still uses node.text[:200].
-Legacy CLI search cannot establish complete publication provenance. Integration
-must use the existing engine's raw full-node interface and independently published
-manifests, or fail closed; it must never promote the legacy snippet to verified text.
+## Moodle lifecycle and publication
 
-## Legacy API authorization
+`MoodlePublicationAdapter` composes Thọ's actual guarded discovery, streaming
+download, `SourceDocument`, complete scan and lifecycle signal functions with
+Thiện's existing `VerifiedPublicationService`. It is not another Moodle client,
+policy, KB resolver or RAG engine. Students see authorized ACTIVE publications;
+only capability-authorized lecturers can discover unpublished Moodle resources.
 
-Production installs a route guard around the existing domain routers. Query/chat
-retain their own shared dependency. History and progress bind owner_ref before
-operation; attempt/quiz/card operations look up persisted owner and course before
-mutation. Unbound legacy learning artifacts are not promoted to owned artifacts.
-Detailed inventory, global user/course listings, material writes and internal
-learning registration require the existing operator service credential. Public
-health stays minimal. New /learning routes apply the same dependency directly.
+Stable document identities include namespace/course/resource and, where necessary,
+stable file IDs. Filename/version-hint changes do not change identity. Raw bytes
+produce `content_hash`; Moodle's timestamp hint is stored separately. Internal
+operator ingestion uses the same stable-ID helper and publication authority;
+ambiguous multi-file operator requests fail instead of silently selecting a file.
+Use the personal sync flow to select an exact multi-file identity.
 
-The old SQL schemas are preserved. VerifiedLearningArtifacts is an additive binding
-and context table, not a destructive migration or implicit owner backfill.
+Complete discovery/download, fresh reauthorization, stable snapshot confirmation
+and all normalization precede destructive signals. CANDIDATE/UNCHANGED sources
+publish before TOMBSTONE operations. A failed scan/normalization produces no
+TOMBSTONE; a failed candidate keeps its previous ACTIVE version and stops deletion.
+One OS scan lock serializes complete/per-document scans. One ledger lock atomically
+activates each new manifest and supersedes the old source version. Successful
+stable-ID publication also atomically retires its legacy numeric resource record.
+Resource status and operator retirement resolve actual document IDs from resource
+metadata. No implicit owner assignment, timer-based deletion or destructive schema
+migration is introduced.
 
-## Full-source publication and lifecycle
+Publication uses the installed DeepTutor LlamaIndex raw-node bridge. Each immutable
+source version gets a private physical KB; the logical course KB is server-owned.
+The legacy node.text[:200] serializer never supplies verified grounding. Other
+engine providers fail closed until equivalent full-node evidence is implemented.
+Source IDs containing colons are hashed only for staging paths; provenance retains
+the original stable ID. Existing containment/junction/symlink protections remain.
 
-The adapter uses DeepTutor's existing LlamaIndex persisted nodes and plain vector
-retriever, avoiding the legacy 200-character serializer and query-fusion/synthesis.
-Every document version is indexed into an immutable private engine KB. The logical
-course KB remains server-controlled; private publication KBs are never selectors
-accepted from a student. Other engine providers fail closed until their raw-node
-adapter supports equivalent evidence.
+ACTIVE Ledger V2 records bind namespace/numeric course/logical KB/document/source
+and artifact hashes, source version, real node IDs/content hashes and physical
+publication/index identity. Retrieval verifies raw full nodes against that manifest.
+Whole verified chunks are selected within 32,000 characters, without promoting a
+preview to complete text. The ledger lease lasts through provider calls so retirement
+cannot race an old prompt. Old private index files remain for recovery but are never
+selected after supersession/deletion.
 
-Canonical source-ref/hash helpers were adopted from the audited local groundwork;
-the synthetic-only verifier was not promoted into production evidence. The single
-AuthorizedCourseScope now lives in integration contracts. ACTIVE Ledger V2 records
-bind namespace, numeric course, logical KB, source/artifact hashes, real engine node
-IDs/content hashes and publication/index identity. No filename-derived ownership.
+## Verified learning and storage
 
-Ingestion publishes a manifest only after full-node export succeeds. A single
-locked write retires the old record and activates the new one. Failed publication
-marks FAILED and leaves the previous ACTIVE record intact. Update/delete serializes
-with context leases held through provider calls, so completed retirement cannot
-race an old source into a prompt. Private old index artifacts are retained for
-recovery but never selected by ACTIVE-only retrieval.
+The application uses Quân's actual `LearningGenerationService`, Quiz/Flashcard
+services and SQL repositories. Thiện's `VerifiedRetrievalContext` is projected to
+Quân's strict `VerifiedLearningContext`; that DTO is not a trust authority.
+The sole validator checks the in-process issuance receipt, exact context equality,
+owner/course/logical KB, current Moodle authorization and current ACTIVE provenance.
+Only literal True is accepted. Receipt lifetime equals the active context lease.
+Unknown, changed or expired receipts fail closed. Quân revalidates before provider
+use and again before persistence; revocation produces no trusted artifact.
 
-The context builder selects whole verified chunks within 32,000 characters. UI
-preview is separate; citations correspond exactly to selected prompt chunks.
-Resource-derived paths reject traversal/absolute forms and resolved-root escapes.
+QuizDefinitions.context_json and Flashcards.artifact_json are nullable additive
+migrations. Quân stores full verified context, stable UUID question/artifact IDs,
+server-only quiz keys and full card front/back with owner/course/context. Existing
+VerifiedLearningArtifacts stores the canonical verification receipt and bindings;
+new cards are not duplicated in its payload. No old rows are fabricated into verified
+artifacts. Legacy NULL-context cards fail with controlled 409. Domain inserts use
+explicit columns; schema initialization is repeatable on empty and populated DBs.
 
+Public quiz DTOs exclude keys, explanations and raw context, including citation
+previews before submission. Grading uses the stored definition and deterministic
+GradingService with zero provider calls. Grading, answers, evidence and mastery are
+one SQL transaction. Duplicate submits are controlled. Flashcard batches are atomic;
+review IDs are idempotent with conflict detection. Owner/course guards protect all
+artifact, attempt, review, history and progress routes. Both new /learning routes and
+legacy factories receive the same verified scope dependency; imports stay internal.
 
-## Learning and storage compatibility
+Quiz review rechecks the saved canonical context against ACTIVE sources before any
+optional explanation call. Retired context yields explanation unavailable and zero
+LLM calls. Historical owner artifacts/grades remain readable. A historical citation
+records verification at generation, not current ACTIVE status. Source integrity does
+not certify factual correctness of model output.
 
-Verified /learning endpoints compose Quan's existing QuizService, QuizRepository,
-GradingService, ExplanationService, FlashcardService, LearningEvidenceRepository,
-MasteryService and recommendation rule evaluation. They do not introduce another
-provider, grading algorithm or Moodle adapter. HTTP DTOs reject caller identity,
-source-context and score claims; owner and current course permission precede mutation.
+A domain write followed by an application binding failure can leave an inaccessible
+orphan. No binding means no student access through the production route guard;
+operator recovery is required. This existing limit is retained rather than creating
+another persistence architecture. Back up the real database before deployment.
 
-The new additive VerifiedLearningArtifacts table stores hashed principal/course
-bindings, full generated card front/back, and the exact verified context used for
-quiz/card generation. Existing QuizDefinitions retains server-only answer keys;
-QuizAttempts/QuizAnswers and evidence/mastery remain Quan's existing transaction.
-A definition/registry commit followed by a binding failure can leave an inaccessible
-orphan. No binding means no student access; recovery is operator-only. No existing
-rows are deleted or silently assigned new owners. Back up the DB before deployment;
-startup creates the additive table/index alongside the existing idempotent schemas.
+Mastery and recommendations use server-owned evidence and deterministic rules.
+No evidence is reported as unknown, not zero mastery. Optional prose cannot override
+rule-selected actions. Chat reauthorizes before and after provider use and persists
+only owner/course-bound history and stable source snapshots.
 
-Quiz review loads the persisted question, grading facts and original context. It
-rechecks ACTIVE membership while holding the publication lease before explanation.
-Retired context yields explanation unavailable and zero LLM calls; deterministic
-score and historical artifacts remain readable to their owner. Historical citation
-snapshots record verification at generation, not certification that the source is
-still ACTIVE. Citation integrity does not certify the answer's factual correctness.
+## Streamlit and operator routes
 
-## Streamlit and API use
+The active Streamlit app starts with personal-token login and /auth/me. Backend
+scope, enrollment and capability decide course visibility and lecturer controls.
+Logout clears session state. Documents, chat/history, public quiz/grade/review,
+persisted flashcards/reviews and progress all use /learning routes. Lecturer controls
+include exact per-document sync/retire and complete course sync. Students do not
+perform privileged resource discovery. No UI role/student-ID claim establishes trust.
+The old demo page remains unreachable after st.stop(). Detailed inventory, user/course
+lists, material writes and internal learning imports require the operator credential;
+anonymous health returns minimal signals only.
 
-Start FastAPI/Streamlit with the existing project launcher. For a worktree, configure
-DEEPTUTOR_DIR to the installed engine checkout; its venv supplies the bridge SDK.
-Set MOODLE_BASE_URL, SQL and provider/embedding configuration in an ignored local
-.env. Enable Moodle web-service site_info, enrolled-course lookup, course contents
-and secure file download for each intended user's personal token. Never use the
-shared LMS_MOODLE_DISCOVERY_TOKEN as student login evidence.
+For a worktree, point DEEPTUTOR_DIR at the installed engine checkout. Configure SQL,
+MOODLE_BASE_URL, personal-token web-service permissions, capability service evidence,
+provider and embedding settings in an ignored local .env. Do not reuse MOODLE_TOKEN,
+LMS_MOODLE_DISCOVERY_TOKEN or MOODLE_CAPABILITY_SERVICE_TOKEN for personal login.
+Enable site_info, enrolled-course lookup and mod_resource discovery/file permissions
+for intended personal tokens. File credentials use token, or explicitly configured
+MOODLE_FILE_CREDENTIAL_PARAMETER=wstoken. Other parameter names fail closed.
 
-The active app starts at personal-token login and /auth/me. Each authenticated UI
-rerun refreshes principal-bound courses. Every application request carries only the
-personal Bearer credential; no browser/UI-selected role or student ID grants access.
-Logout clears all Streamlit session state. The five tabs consume /learning routes:
-course documents; saved Chat with source snapshots; public Quiz/attempt/grade/review;
-persisted Flashcards and review evidence; server mastery/rule recommendations.
-The historical demo page remains unreachable after st.stop() for gradual cleanup.
+## Reproducible acceptance and limits
 
-Lecturer sync/retire controls appear only when backend can_sync is true. Configure
-LMS_COURSE_ACTION_AUTHORIZER=module:function with Tho's BoundCourseAuthorizer contract:
-(binding, numeric_course_id, CourseAction) -> exact LIVE AuthorizationDecision.
-Missing, denied, cached or unavailable write evidence fails closed. Operator routes
-remain separately protected by the existing shared service key, and production
-Moodle ingestion/resource status now uses V2 publication. No destructive migration,
-Gemini integration, new RAG engine, or duplicate auth/domain services is included.
+Full regression:
 
-## Validation and operational limits
+```powershell
+python -B -X utf8 -m pytest -q --tb=short -p no:cacheprovider tests
+python -m pip check
+git diff --check
+```
 
-Focused tests use fake Moodle/engine/provider transports and a DB-API contract fake,
-while executing real auth, policy, publication, source verification, domain grading,
-evidence/mastery, API and Streamlit AppTest code. Live SQL connectivity and Ollama
-health are separate infrastructure checks, not proof of the full multi-user scenario.
-The final review report records exact counts and live prerequisites.
+The opt-in SQL test runs actual team API/repositories, migrations, transactions,
+concurrency and rollback against two uniquely named temporary SQL Server databases.
+Moodle/SDK/provider transports remain fake. It never migrates the production DB,
+checks each database was absent before creation and drops only its own checked name.
+It uses Windows integrated authentication; ODBC pooling is disabled for cleanup.
 
-The ACTIVE ledger OS lock is held through each generation so retirement cannot race
-an old prompt; concurrent calls can hit the existing lock timeout. Tune concurrency
-only after measuring. Old private indexes are retained for recovery; operator-only
-GC is deferred. Only the current LlamaIndex raw-node adapter is implemented; other
-RAG providers fail closed. No automatic Moodle deletion poll is invented: sync/update
-and retire consume explicit adapter/UI/operator lifecycle signals. Structured Python
-logging records publication/context IDs and counts, never credentials or answer keys.
+```powershell
+$env:LMS_ACCEPTANCE_ENV_FILE = 'C:\path\to\ignored\.env'
+python -B -X utf8 -m pytest -q -s --tb=short -p no:cacheprovider tests/manual/sql_final_team_acceptance.py
+```
+
+Streamlit AppTest verifies the real UI code with fake HTTP transport. It is not a
+live browser result. The final acceptance report distinguishes all code, SQL and
+live component statuses. Real personal student A/B and lecturer/capability credentials
+were unavailable, so full live E2E remains NOT_VERIFIED. Local Ollama generation was
+separately exercised through the actual provider implementation.
+
+The OS publication lock lasts through generation; high concurrency can reach its
+existing timeout. No load/performance claim is made. Old-index garbage collection,
+legacy unreachable demo cleanup and FastAPI/Starlette deprecation migration remain
+P2 follow-ups. No new dependencies, Gemini integration or extra RAG engine were added.
