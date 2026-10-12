@@ -15,10 +15,15 @@ from backend.services.ai.grading_service import GradingService
 from deeptutor_integration.auth_contracts import CourseAction
 from deeptutor_integration.document_normalizer import DocumentNormalizer
 from deeptutor_integration.errors import DeepTutorError
-from quiz_lifecycle import QuizDefinitionRequest, StartAttemptRequest, SubmittedAnswer
-from learning_evidence import FlashcardRegistration, FlashcardReviewRequest
+from deeptutor_integration.verified_publication import VerifiedPublicationService
+from quiz_lifecycle import StartAttemptRequest, SubmittedAnswer
+from learning_evidence import FlashcardReviewRequest
 from verified_learning_repository import context_payload, restore_context
 from verified_chat import verified_chat
+from backend.services.ai.learning_context import LearningScope
+from learning_generation import LearningGenerationService
+from deeptutor_integration.moodle_publication import MoodlePublicationAdapter
+from deeptutor_integration.auth_contracts import AuthContractError
 
 
 class SafeLearningRoute(APIRoute):
@@ -27,6 +32,7 @@ class SafeLearningRoute(APIRoute):
         async def safe(request):
             try: return await handler(request)
             except HTTPException: raise
+            except AuthContractError as error: raise HTTPException(error.status_code,detail=error.public_payload()) from None
             except RequestValidationError:
                 raise HTTPException(422,detail={"code":"invalid_request","message":"Learning request is invalid."}) from None
             except DeepTutorError as error: raise HTTPException(error.status_code,detail=error.as_dict()) from None
@@ -34,7 +40,8 @@ class SafeLearningRoute(APIRoute):
                 code=str(error).split(":",1)[0]
                 known={"artifact_not_found":404,"attempt_not_found":404,"quiz_not_found":404,
                        "already_submitted":409,"invalid_question":422,"invalid_option":422,"course_mismatch":403,
-                       "idempotency_conflict":409,"persistence_failure":503,"mastery_not_found":404,
+                       "idempotency_conflict":409,"learning_scope_forbidden":403,"flashcard_conflict":409,"flashcard_context_unavailable":409,
+                       "learning_context_verifier_not_configured":503,"learning_context_rejected":409,"INVALID_LEARNING_CONTEXT":422,"persistence_failure":503,"mastery_not_found":404,
                        "INSUFFICIENT_GROUNDED_CONTEXT":409,"QUIZ_GENERATION_FAILED":502,
                        "FLASHCARD_GENERATION_FAILED":502,"INVALID_QUIZ_SCHEMA":502,"INVALID_FLASHCARD_SCHEMA":502}
                 status=known.get(code,503)
@@ -96,13 +103,31 @@ def public_quiz(quiz,context):
     public=QuizService.to_public_result({"questions":quiz["questions"]})
     for original,item in zip(quiz["questions"],public["questions"]): item["question_id"]=original["question_id"]
     return {"quiz_id":quiz["quiz_id"],"course_id":quiz["course_id"],"topic":quiz["topic"],
-            **public,"context_id":context.context_id,"sources":context.citations()}
+            **public,"context_id":context.context_id,"sources":VerifiedPublicationService.learning_context(context).source_metadata()}
 
 
 def create_verified_learning_router(authorizer,publications,repository,orchestrator,chat_service,recommendations):
     router=APIRouter(prefix="/learning",tags=["verified-learning"],route_class=SafeLearningRoute)
     quizzes=QuizService(orchestrator); cards=FlashcardService(orchestrator); explanations=ExplanationService(orchestrator)
-    grader=GradingService(); normalizer=DocumentNormalizer()
+    grader=GradingService(); moodle=MoodlePublicationAdapter(publications)
+
+    async def generate_with_authority(access,context,kind,request):
+        failures=[]
+        def validate(scope,learning):
+            try: return publications.validate_learning_context(scope,learning,access)
+            except Exception as error:
+                failures.append(error); raise
+        generation=LearningGenerationService(quizzes,cards,repository.quizzes,repository.evidence,context_validator=validate)
+        learning=publications.learning_context(context)
+        try:
+            if kind=="quiz":
+                return await generation.generate_quiz(learning.scope,learning,topic=request.topic,question_count=request.count,difficulty=request.difficulty)
+            return await generation.generate_flashcards(learning.scope,learning,topic=request.topic,count=request.count,difficulty=request.difficulty)
+        except ValueError:
+            if failures: raise failures[-1]
+            raise
+
+    def learning_scope(scope): return LearningScope(owner_id=scope.owner_ref,course_id=scope.course_key)
 
     async def owned(kind,identifier,access):
         artifact=await run_in_threadpool(repository.get,kind,identifier)
@@ -125,19 +150,24 @@ def create_verified_learning_router(authorizer,publications,repository,orchestra
     @router.get("/courses/{course_id}/documents")
     def documents(course_id:str,access=Depends(authorizer)):
         scope=access.scope(course_id)
-        resources=access.moodle_adapter().list_file_resources(scope.moodle_course_id)
-        return {"course_id":scope.course_key,"resources":resources,"publications":publications.documents(scope)}
+        published=publications.documents(scope)
+        return {"course_id":scope.course_key,"resources":[],"publications":published}
+
+    @router.get("/courses/{course_id}/resources")
+    def resources(course_id:str,access=Depends(authorizer)):
+        return {"resources":moodle.resources(access,course_id)}
+
+    @router.post("/courses/{course_id}/sync")
+    def sync_course(course_id:str,access=Depends(authorizer)): return moodle.sync(access,course_id)
 
     @router.post("/courses/{course_id}/documents/{resource_id}/sync")
-    def sync(course_id:str,resource_id:int,access=Depends(authorizer)):
-        scope=access.scope(course_id,action=CourseAction.SYNC_COURSE_RESOURCE)
-        source=access.moodle_adapter().get_source_document(scope.moodle_course_id,resource_id)
-        return publications.publish(scope,normalizer.normalize(source))
+    def sync(course_id:str,resource_id:str,access=Depends(authorizer)):
+        return moodle.sync_document(access,course_id,resource_id)
 
     @router.delete("/courses/{course_id}/documents/{resource_id}")
-    def delete_document(course_id:str,resource_id:int,access=Depends(authorizer)):
+    def delete_document(course_id:str,resource_id:str,access=Depends(authorizer)):
         scope=access.scope(course_id,action=CourseAction.SYNC_COURSE_RESOURCE)
-        return publications.delete(scope,str(resource_id))
+        return publications.delete(scope,resource_id)
 
     @router.post("/courses/{course_id}/chat")
     async def chat(course_id:str,request:ChatInput,access=Depends(authorizer)):
@@ -159,15 +189,10 @@ def create_verified_learning_router(authorizer,publications,repository,orchestra
     async def generate_quiz(course_id:str,request:GenerationInput,access=Depends(authorizer)):
         scope=await run_in_threadpool(access.scope,course_id,request.kb_name)
         async with learning_context(publications,scope,request.question) as context:
-            internal=await quizzes.generate_grounded_quiz(topic=request.topic,question_count=request.count,
-                difficulty=request.difficulty,question_types=["mcq"],retrieved_context=context.text(),
-                source_metadata=context.citations(),client_facing=False)
-            questions=[{"question_id":f"q{index}",**q} for index,q in enumerate(internal["questions"],1)]
-            definition=QuizDefinitionRequest(quiz_id=uuid4().hex,course_id=scope.course_key,
-                topic=request.topic,difficulty=request.difficulty,questions=questions)
-            await run_in_threadpool(repository.quizzes.save_quiz,definition)
-            await run_in_threadpool(repository.put,"quiz",definition.quiz_id,scope,{"context":context_payload(context)})
-            return public_quiz(definition.model_dump(),context)
+            generated=await generate_with_authority(access,context,"quiz",request)
+            await run_in_threadpool(repository.put,"quiz",generated["quiz_id"],scope,{"context":context_payload(context)})
+            # Public projection comes from Quan, with stable IDs and no raw context.
+            return {**generated,"topic":request.topic,"context_id":context.context_id,"sources":publications.learning_context(context).source_metadata()}
 
     @router.get("/quizzes/{quiz_id}")
     async def quiz(quiz_id:str,access=Depends(authorizer)):
@@ -183,8 +208,8 @@ def create_verified_learning_router(authorizer,publications,repository,orchestra
 
     @router.post("/attempts/{attempt_id}/submit")
     async def submit(attempt_id:str,request:SubmissionInput,access=Depends(authorizer)):
-        await owned_attempt(attempt_id,access)
-        return await run_in_threadpool(repository.quizzes.submit,attempt_id,[a.model_dump() for a in request.answers],grader)
+        _,scope,_=await owned_attempt(attempt_id,access)
+        return await run_in_threadpool(repository.quizzes.submit,attempt_id,[a.model_dump() for a in request.answers],grader,scope=learning_scope(scope))
 
     @router.get("/attempts/{attempt_id}/review")
     async def review(attempt_id:str,access=Depends(authorizer)):
@@ -195,7 +220,9 @@ def create_verified_learning_router(authorizer,publications,repository,orchestra
         results=[]
         lease=publications.ledger._locked(); await run_in_threadpool(lease.__enter__)
         try:
-            try: publications.revalidate(context); active=True
+            try:
+                await run_in_threadpool(access.reauthorize,scope)
+                publications.revalidate(context); active=True
             except DeepTutorError: active=False
             for answer in answers:
                 item={**answer,"explanation_status":"unavailable"}
@@ -217,29 +244,26 @@ def create_verified_learning_router(authorizer,publications,repository,orchestra
     async def generate_cards(course_id:str,request:GenerationInput,access=Depends(authorizer)):
         scope=await run_in_threadpool(access.scope,course_id,request.kb_name)
         async with learning_context(publications,scope,request.question) as context:
-            generated=await cards.generate_grounded_flashcards(topic=request.topic,count=request.count,
-                difficulty=request.difficulty,retrieved_context=context.text(),source_metadata=context.citations())
-            result=[]
+            generated=await generate_with_authority(access,context,"flashcard",request)
             for card in generated["flashcards"]:
-                identifier=uuid4().hex
-                await run_in_threadpool(repository.evidence.register_flashcard,
-                    FlashcardRegistration(flashcard_id=identifier,course_id=scope.course_key,topic=request.topic))
-                payload={"card":card,"context":context_payload(context)}
-                await run_in_threadpool(repository.put,"flashcard",identifier,scope,payload)
-                result.append({"flashcard_id":identifier,**card})
-            return {"flashcards":result,"sources":context.citations(),"context_id":context.context_id}
+                await run_in_threadpool(repository.put,"flashcard",card["flashcard_id"],scope,{"context":context_payload(context)})
+            return {**generated,"sources":context.citations(),"context_id":context.context_id}
 
     @router.get("/courses/{course_id}/flashcards")
     def list_cards(course_id:str,access=Depends(authorizer)):
         scope=access.scope(course_id)
-        return {"flashcards":[{"flashcard_id":item["artifact_id"],**item["payload"]["card"]}
-                              for item in repository.list("flashcard",scope)]}
+        result=[]
+        for item in repository.list("flashcard",scope):
+            card=repository.evidence.flashcard(item["artifact_id"],learning_scope(scope))
+            result.append({key:card[key] for key in ("flashcard_id","front_text","back_text","topic")})
+            result[-1]["sources"]=card["learning_context"]["sources"] if card.get("learning_context") else []
+        return {"flashcards":result}
 
     @router.post("/flashcards/{flashcard_id}/reviews")
     async def review_card(flashcard_id:str,request:ReviewInput,access=Depends(authorizer)):
         _,scope,_=await owned("flashcard",flashcard_id,access)
         return await run_in_threadpool(repository.evidence.review,flashcard_id,
-            FlashcardReviewRequest(student_id=scope.owner_ref,rating=request.rating,review_id=request.review_id))
+            FlashcardReviewRequest(student_id=scope.owner_ref,rating=request.rating,review_id=request.review_id),scope=learning_scope(scope))
 
     @router.get("/courses/{course_id}/progress")
     def progress(course_id:str,access=Depends(authorizer)):

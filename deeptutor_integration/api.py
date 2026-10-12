@@ -66,6 +66,8 @@ def create_router(
             def verified_query():
                 scope=authorize_query.scope(request.course_id,request.kb_id)
                 with publication_service.context(scope,request.question) as context:
+                    authorize_query.reauthorize(scope)
+                    publication_service.revalidate(context)
                     return {"course_id":scope.course_key,"kb_id":scope.kb_name,"context_id":context.context_id,
                             "result":{"sources":[{**c.citation(),"content":c.content} for c in context.chunks]}}
             return call(verified_query)

@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 from concurrent.futures import ThreadPoolExecutor
 import httpx
+import requests
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -39,12 +40,12 @@ def runtime(tmp_path,monkeypatch):
     service=DeepTutorService(config,MagicMock())
     def moodle(url,**kw):
         token=kw["data"]["wstoken"]
-        if token=="down": raise httpx.ConnectError("SECRET")
+        if token=="down": raise requests.ConnectionError("SECRET")
         if token not in {"A","B"}: return httpx.Response(200,json={"errorcode":"invalidtoken"})
         uid=1 if token=="A" else 2
-        if kw["data"]["wsfunction"]=="core_webservice_get_site_info": return httpx.Response(200,json={"userid":uid})
+        if kw["data"]["wsfunction"]=="core_webservice_get_site_info": return httpx.Response(200,json={"userid":uid,"siteurl":"https://moodle.test","functions":[{"name":"core_enrol_get_users_courses"}]})
         return httpx.Response(200,json=[{"id":9 if uid==1 else 10,"shortname":"INT1339" if uid==1 else "OTHER"}])
-    monkeypatch.setattr("course_query_auth.httpx.post",moodle)
+    monkeypatch.setattr("deeptutor_integration.moodle_trust.requests.post",moodle)
     authorizer=create_moodle_query_authorizer(service,"https://moodle.test")
     orch=MagicMock(); orch.generate=AsyncMock(return_value=LLMResult("success","fake","fake","Answer",0))
     app=FastAPI(); app.include_router(create_router(service,query_authorizer=authorizer,publication_service=publications))

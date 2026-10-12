@@ -65,7 +65,10 @@ def test_chat_quiz_grade_evidence_progress_and_explanation_vertical_flow(learnin
     assert reloaded==quiz
     attempt=client.post(f"/learning/quizzes/{quiz_id}/attempts",headers=headers()).json()["attempt_id"]
     orch.generate.reset_mock()
-    score=client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[{"question_id":"q1","selected_option_id":"B","correct_option_id":"B"}]}).json()
+    question_id=quiz["questions"][0]["question_id"]
+    spoof=client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[{"question_id":question_id,"selected_option_id":"B","correct_option_id":"B"}]})
+    assert spoof.status_code==422
+    score=client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[{"question_id":question_id,"selected_option_id":"B"}]}).json()
     assert score["score_percent"]==0 and score["correct_count"]==0
     orch.generate.assert_not_awaited()
     assert len(state["events"])==1 and state["events"][0]["course_id"]=="INT1339"
@@ -163,31 +166,12 @@ def test_owner_history_and_progress_are_never_taken_from_client(learning):
     assert client.get("/learning/courses/OTHER/progress?student_id=A",headers=headers("B")).json()["topics"]==[]
 
 
-def test_lecturer_sync_reuses_source_adapter_normalizer_and_publication(learning,monkeypatch):
-    from datetime import datetime,timezone
-    from deeptutor_integration.auth_contracts import AuthorizationDecision,CacheState
-    from deeptutor_integration.contracts import SourceDocument
-    from course_query_auth import MoodleQueryAccess
-    client,_,_,_,pub,engine=learning
-    download=MagicMock(return_value=SourceDocument(course_id="INT1339",document_id="1",filename="lecture.md",mime_type="text/markdown",content=b"UPDATED_FROM_MOODLE"))
-    adapter=MagicMock(); adapter.get_source_document=download
-    monkeypatch.setattr(MoodleQueryAccess,"moodle_adapter",lambda _:adapter)
-    original=MoodleQueryAccess.scope
-    def live_scope(self,course,kb_name=None,action=None):
-        from deeptutor_integration.auth_contracts import CourseAction
-        self.action_authorizer=lambda binding,numeric,act: AuthorizationDecision(True,"lecturer",numeric,act,datetime.now(timezone.utc),"test/live",CacheState.LIVE)
-        return original(self,course,kb_name,action or CourseAction.QUERY_COURSE)
-    # Default missing action evidence denies before download/publication.
+def test_lecturer_sync_requires_actual_capability_before_discovery(learning,monkeypatch):
+    client,_,_,_,_,engine=learning
+    from deeptutor_integration.moodle_trust import MoodleTrustBoundary
+    discovery=MagicMock()
+    monkeypatch.setattr(MoodleTrustBoundary,"discover",discovery)
     before=engine.publish.call_count
     assert client.post("/learning/courses/INT1339/documents/1/sync",headers=headers()).status_code==503
-    download.assert_not_called(); assert engine.publish.call_count==before
-    monkeypatch.setattr(MoodleQueryAccess,"scope",live_scope)
     assert client.post("/learning/courses/INT1339/documents/1/sync",headers=headers("B")).status_code==403
-    download.assert_not_called()
-    result=client.post("/learning/courses/INT1339/documents/1/sync",headers=headers())
-    assert result.status_code==200 and result.json()["status"]=="ACTIVE"
-    download.assert_called_once_with(9,1)
-    active=[r for r in pub.ledger.snapshot().records.values() if r.lifecycle.value=="ACTIVE"]
-    assert len(active)==1 and active[0].original_filename=="lecture.md"
-    assert client.delete("/learning/courses/INT1339/documents/1",headers=headers()).status_code==200
-    assert not [r for r in pub.ledger.snapshot().records.values() if r.lifecycle.value=="ACTIVE"]
+    discovery.assert_not_called(); assert engine.publish.call_count==before

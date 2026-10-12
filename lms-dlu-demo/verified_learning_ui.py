@@ -85,22 +85,26 @@ def render_verified_learning(base_url):
             data=client.request("GET",prefix+"/documents")
             published={d["document_id"]:d for d in data.get("publications",[])}
             can_sync=next(c.get("can_sync",False) for c in courses if c["course_key"]==course)
+            if can_sync:
+                data["resources"]=client.request("GET",prefix+"/resources")["resources"]
+                if st.button("Đồng bộ toàn khóa học"):
+                    client.request("POST",prefix+"/sync"); st.rerun()
             for resource in data.get("resources",[]):
-                identifier=str(resource["resource_id"])
+                identifier=resource["document_id"]
                 st.write(resource["filename"])
                 st.caption("ACTIVE" if identifier in published else "Chưa publish ACTIVE")
                 if can_sync:
                     if st.button("Đồng bộ",key="sync_"+identifier):
-                        client.request("POST",prefix+"/documents/"+identifier+"/sync"); st.rerun()
+                        client.request("POST",prefix+"/documents/"+quote(identifier,safe="")+"/sync"); st.rerun()
                     if identifier in published and st.button("Ngừng sử dụng",key="retire_"+identifier):
-                        client.request("DELETE",prefix+"/documents/"+identifier); st.rerun()
-            resource_ids={str(r["resource_id"]) for r in data.get("resources",[])}
+                        client.request("DELETE",prefix+"/documents/"+quote(identifier,safe="")); st.rerun()
+            resource_ids={r["document_id"] for r in data.get("resources",[])}
             for identifier,publication in published.items():
                 if identifier not in resource_ids:
                     st.write(publication.get("filename") or identifier)
                     st.caption("ACTIVE; tài liệu không còn được Moodle liệt kê.")
                     if can_sync and st.button("Ngừng sử dụng",key="retire_"+identifier):
-                        client.request("DELETE",prefix+"/documents/"+identifier); st.rerun()
+                        client.request("DELETE",prefix+"/documents/"+quote(identifier,safe="")); st.rerun()
             if not data.get("resources") and not published: st.info("Chưa có tài liệu được phép truy cập.")
         except BackendRequestError as error: show_error(error)
     with chat:
@@ -170,7 +174,7 @@ def render_verified_learning(base_url):
             for card in client.request("GET",prefix+"/flashcards").get("flashcards",[]):
                 with st.expander(card["front_text"]):
                     st.write(card["back_text"])
-                    render_citations(st,card.get("source_metadata",[]))
+                    render_citations(st,card.get("sources",[]))
                     rating=st.selectbox("Mức độ nhớ",["AGAIN","HARD","GOOD","EASY"],key="card_review_"+card["flashcard_id"])
                     if st.button("Ghi nhận ôn tập",key="record_"+card["flashcard_id"]):
                         pending=st.session_state.setdefault("work_review_ids",{})

@@ -1,6 +1,6 @@
 """Production guards for legacy HTTP routes; domain repositories stay reusable."""
 import re
-from fastapi import HTTPException
+from fastapi import HTTPException,Depends,Request
 from fastapi.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 from moodle_service_auth import require_moodle_service
@@ -54,7 +54,7 @@ def install_legacy_security(app, authorizer, owner_lookup):
             elif path.startswith("/deeptutor/kb/"):
                 await run_in_threadpool(access.scope, path.split("/")[3])
             else:
-                match = re.fullmatch(r"/(quiz-attempts|quizzes|flashcards)/([^/]+)/(submit|review|reviews|attempts)", path)
+                match = re.fullmatch(r"/(quiz-attempts|quizzes|flashcards)/([^/]+)(?:/(submit|review|reviews|attempts))?", path)
                 if not match:
                     raise HTTPException(403, detail={"code": "route_access_denied", "message": "Route access is not permitted."})
                 resource, identifier, operation = match.groups()
@@ -81,3 +81,18 @@ def install_legacy_security(app, authorizer, owner_lookup):
             return JSONResponse({"detail": {"code": "invalid_request", "message": "Request is invalid."}}, status_code=422)
         except Exception:
             return JSONResponse({"detail": {"code": "authorization_dependency_unavailable", "message": "Authorization dependency is unavailable."}}, status_code=503)
+
+
+def create_learning_scope_dependency(authorizer,owner_lookup):
+    from backend.services.ai.learning_context import LearningScope
+    def scope(request:Request,access=Depends(authorizer)):
+        parameters=request.path_params
+        course=parameters.get("course_id")
+        if course is None:
+            for kind,key in (("attempt","attempt_id"),("quiz","quiz_id"),("flashcard","flashcard_id")):
+                if key in parameters:
+                    owner,course=owner_lookup(kind,parameters[key]); access.require_owner(owner); break
+        if course is None: raise HTTPException(503,detail={"code":"learning_scope_unavailable","message":"Learning scope is unavailable."})
+        authorized=access.scope(course)
+        return LearningScope(owner_id=authorized.owner_ref,course_id=authorized.course_key)
+    return scope

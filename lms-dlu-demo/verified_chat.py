@@ -17,6 +17,7 @@ async def verified_chat(publications, access, question, course_id, kb_name, chat
     except DeepTutorError as error:
         raise HTTPException(error.status_code,detail=error.as_dict()) from None
     try:
+        await run_in_threadpool(access.reauthorize,scope)
         publications.revalidate(context)
         response=await chat.chat(GroundedChatRequest(query=question,course_id=scope.course_key,kb_name=scope.kb_name,
             contexts=[RetrievedContextItem(text=c.content,source_id=c.source_ref,title=c.filename,score=c.score,
@@ -26,6 +27,8 @@ async def verified_chat(publications, access, question, course_id, kb_name, chat
             or not isinstance(response.ai,dict) or not isinstance(response.ai.get("provider"),str)
             or not isinstance(response.ai.get("model"),str) or type(response.ai.get("fallback_used")) is not bool):
             raise ValueError("invalid chat response")
+        if response.status!="success": raise DeepTutorError("ai_provider_failure","AI provider could not generate a response.",status_code=502)
+        await run_in_threadpool(access.reauthorize,scope)
         payload=asdict(response)
         payload["sources"]=context.citations()
         payload["context_id"]=context.context_id
@@ -33,6 +36,7 @@ async def verified_chat(publications, access, question, course_id, kb_name, chat
         return payload
     except DeepTutorError as error:
         raise HTTPException(error.status_code,detail=error.as_dict()) from None
+    except HTTPException: raise
     except Exception:
         raise HTTPException(502,detail={"code":"ai_provider_failure","message":"AI provider could not generate a response."}) from None
     finally:

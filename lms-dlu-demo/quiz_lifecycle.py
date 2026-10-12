@@ -158,7 +158,7 @@ class QuizRepository:
                     conn.commit()
                     return {"attempt_id": row[0], "status": "IN_PROGRESS", "started_at": row[1]}
                 attempt_id, now = str(uuid.uuid4()), datetime.now(timezone.utc).replace(tzinfo=None)
-                cursor.execute("INSERT INTO dbo.QuizAttempts VALUES (?, ?, ?, ?, 'IN_PROGRESS', ?, NULL)", attempt_id, request.quiz_id, request.student_id, request.course_id, now)
+                cursor.execute("INSERT INTO dbo.QuizAttempts (attempt_id, quiz_id, student_id, course_id, status, started_at, submitted_at) VALUES (?, ?, ?, ?, 'IN_PROGRESS', ?, NULL)", attempt_id, request.quiz_id, request.student_id, request.course_id, now)
                 conn.commit()
             except Exception as exc:
                 conn.rollback()
@@ -186,7 +186,7 @@ class QuizRepository:
                 graded = grader.grade(quiz["questions"], answers)
                 now = datetime.now(timezone.utc).replace(tzinfo=None)
                 for result in graded["results"]:
-                    cursor.execute("INSERT INTO dbo.QuizAnswers VALUES (?, ?, ?, ?)", attempt_id, result["question_id"], result["selected_option_id"], result["correct"])
+                    cursor.execute("INSERT INTO dbo.QuizAnswers (attempt_id, question_id, selected_option_id, correct) VALUES (?, ?, ?, ?)", attempt_id, result["question_id"], result["selected_option_id"], result["correct"])
                 if self.evidence is not None:
                     self.evidence.record_quiz(cursor, attempt_id=attempt_id, student_id=row[2], course_id=row[3], topic=quiz["topic"], results=graded["results"])
                 cursor.execute("UPDATE dbo.QuizAttempts SET status='SUBMITTED', submitted_at=? WHERE attempt_id=? AND status='IN_PROGRESS'", now, attempt_id)
