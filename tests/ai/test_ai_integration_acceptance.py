@@ -239,14 +239,16 @@ async def test_mastery_direct_to_recommendation(correct_count, count, level, act
 
 
 @pytest.mark.asyncio
-async def test_no_evidence_mastery_is_rejected_without_invented_score():
+async def test_no_evidence_mastery_recommends_practice_without_invented_score():
     mastery = MasteryService().calculate_mastery(**SCOPE, evidence=[])
     assert mastery["mastery_score"] is None and mastery["level"] is None
     assert mastery["confidence"] == "LOW" and mastery["evidence_count"] == 0
     before = deepcopy(mastery)
     orch = mocked_orchestrator("recommendation")
-    with pytest.raises(ValueError, match="INVALID_RECOMMENDATION_INPUT"):
-        await RecommendationService(orch).get_recommendations(mastery, [])
+    result = await RecommendationService(orch).get_recommendations(mastery, [])
+    assert result["mastery_score"] is None
+    assert result["level"] == "INSUFFICIENT_EVIDENCE"
+    assert result["recommended_actions"] == ["REVIEW_TOPIC", "EASY_QUIZ"]
     orch.generate.assert_not_called()
     assert mastery == before
 

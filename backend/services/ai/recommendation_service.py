@@ -9,7 +9,8 @@ class RecommendationService:
     """Authoritative rule data with optional LLM wording only.
 
     Deadlines are non-blank caller strings, preserved without date inference.
-    Numeric Q5 mastery snapshots are required; mastery is never recalculated.
+    Numeric mastery snapshots or explicit zero-evidence null scores are accepted.
+    Mastery is never recalculated by this service.
     """
 
     def __init__(self, orchestrator: AIOrchestrator):
@@ -26,7 +27,8 @@ class RecommendationService:
         confidence = mastery_data.get("confidence")
         if not isinstance(topic, str) or not topic.strip():
             raise ValueError("INVALID_RECOMMENDATION_INPUT: invalid topic")
-        if type(score) not in (int, float) or not 0 <= score <= 100 or not math.isfinite(score):
+        no_evidence = score is None and type(count) is int and count == 0
+        if not no_evidence and (type(score) not in (int, float) or not 0 <= score <= 100 or not math.isfinite(score)):
             raise ValueError("INVALID_RECOMMENDATION_INPUT: invalid mastery score")
         if type(count) is not int or count < 0:
             raise ValueError("INVALID_RECOMMENDATION_INPUT: invalid evidence count")
@@ -74,6 +76,8 @@ class RecommendationService:
                             ensure_ascii=False)
         result["message"] = "Recommended actions: " + ", ".join(result["recommended_actions"]) + "."
         result["message_source"] = "rule-engine"
+        if result["evidence_count"] == 0:
+            return result
         try:
             llm_result = await self.orchestrator.generate(
                 prompt=prompt, system_prompt=system_prompt, **kwargs)

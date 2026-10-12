@@ -23,12 +23,13 @@ class QuizService:
             return deepcopy(source_metadata)
         raise ValueError("INVALID_QUIZ_REQUEST: invalid source_metadata")
 
+    @staticmethod
     def validate_and_parse_quiz(
-        self, raw_content: Any, question_count: Optional[int] = None,
+        raw_content: Any, question_count: Optional[int] = None,
         source_metadata: Any = None,
     ) -> Dict[str, Any]:
         """Parse and validate internal MCQs; only caller sources are retained."""
-        source_metadata = self._copy_sources(source_metadata)
+        source_metadata = QuizService._copy_sources(source_metadata)
         try:
             if isinstance(raw_content, dict):
                 data = raw_content
@@ -47,16 +48,17 @@ class QuizService:
         if not isinstance(data, dict):
             raise ValueError("INVALID_QUIZ_SCHEMA: expected an object")
         questions = data.get("questions")
-        if not isinstance(questions, list) or not questions:
+        if not isinstance(questions, list) or not 1 <= len(questions) <= 20:
             raise ValueError("INVALID_QUIZ_SCHEMA: questions must be non-empty")
 
         validated_questions = []
         question_texts = set()
+        question_ids = set()
         for question in questions:
             if not isinstance(question, dict):
                 raise ValueError("INVALID_QUIZ_SCHEMA: invalid question")
             text = question.get("question", question.get("question_text"))
-            if not isinstance(text, str) or not text.strip():
+            if not isinstance(text, str) or not text.strip() or len(text) > 8000:
                 raise ValueError("INVALID_QUIZ_SCHEMA: blank question")
             normalized_text = " ".join(text.casefold().split())
             if normalized_text in question_texts:
@@ -65,7 +67,7 @@ class QuizService:
             if question.get("type") != "mcq":
                 raise ValueError("INVALID_QUIZ_SCHEMA: only mcq is supported")
             options = question.get("options")
-            if not isinstance(options, list):
+            if not isinstance(options, list) or not 2 <= len(options) <= 20:
                 raise ValueError("INVALID_QUIZ_SCHEMA: invalid options")
             normalized_options = []
             option_texts = set()
@@ -73,9 +75,9 @@ class QuizService:
                 if not isinstance(option, dict):
                     raise ValueError("INVALID_QUIZ_SCHEMA: invalid option")
                 option_id, option_text = option.get("id"), option.get("text")
-                if not isinstance(option_id, str) or not option_id.strip():
+                if not isinstance(option_id, str) or not option_id.strip() or len(option_id) > 128:
                     raise ValueError("INVALID_QUIZ_SCHEMA: blank option id")
-                if not isinstance(option_text, str) or not option_text.strip():
+                if not isinstance(option_text, str) or not option_text.strip() or len(option_text) > 8000:
                     raise ValueError("INVALID_QUIZ_SCHEMA: blank option text")
                 normalized_option_text = " ".join(option_text.casefold().split())
                 if normalized_option_text in option_texts:
@@ -86,7 +88,7 @@ class QuizService:
             explanation = question.get("explanation")
             if not isinstance(correct_id, str) or not correct_id.strip():
                 raise ValueError("INVALID_QUIZ_SCHEMA: invalid answer key")
-            if not isinstance(explanation, str) or not explanation.strip():
+            if not isinstance(explanation, str) or not explanation.strip() or len(explanation) > 16000:
                 raise ValueError("INVALID_QUIZ_SCHEMA: blank explanation")
 
             # Business validation follows normalization/schema validation.
@@ -101,6 +103,13 @@ class QuizService:
                 "question": text.strip(), "type": "mcq", "options": normalized_options,
                 "correct_option_id": correct_id.strip(), "explanation": explanation.strip(),
             }
+            if "question_id" in question:
+                question_id = question["question_id"]
+                if (not isinstance(question_id, str) or not question_id.strip()
+                        or len(question_id) > 128 or question_id in question_ids):
+                    raise ValueError("INVALID_QUIZ_SCHEMA: invalid or duplicate question id")
+                question_ids.add(question_id)
+                validated["question_id"] = question_id
             if source_metadata is not None:
                 validated["source_metadata"] = deepcopy(source_metadata)
             validated_questions.append(validated)
@@ -114,6 +123,7 @@ class QuizService:
         """Allowlist public fields and option fields; exclude nested metadata."""
         return {"questions": [
             {
+                **({"question_id": question["question_id"]} if "question_id" in question else {}),
                 "question": question["question"], "type": question["type"],
                 "options": [{"id": option["id"], "text": option["text"]}
                             for option in question["options"]],
