@@ -110,6 +110,7 @@ def create_grounded_chat_router(
     deeptutor_service: DeepTutorService,
     grounded_chat_service: GroundedChatService | None,
     query_authorizer: Callable[..., QueryAccessChecker] | None = None,
+    publication_service=None,
 ) -> APIRouter:
     router = APIRouter(tags=["grounded-chat"])
     query_dependency = Depends(query_authorizer or _query_auth_not_configured)
@@ -131,6 +132,10 @@ def create_grounded_chat_router(
                 status_code=503,
                 detail={"code": "ai_unavailable", "message": "AI provider is not configured."},
             )
+        if publication_service is not None:
+            from verified_chat import verified_chat
+            return await verified_chat(publication_service, authorize_query, request.question,
+                                       query.course_id, query.kb_id, grounded_chat_service)
         try:
             query.kb_id = deeptutor_service.kb_name(query.course_id, query.kb_id)
             query_result = deeptutor_service.query(query)

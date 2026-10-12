@@ -46,6 +46,11 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# The legacy demo view below remains reference code; production uses verified identity.
+from verified_learning_ui import render_verified_learning
+render_verified_learning(FASTAPI_URL)
+st.stop()
+
 # ==============================================================================
 # 3. CSS - GIỮ GIAO DIỆN FRONTEND CŨ
 # ==============================================================================

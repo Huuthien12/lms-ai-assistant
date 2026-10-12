@@ -60,6 +60,7 @@ from deeptutor_integration import DeepTutorConfig, DeepTutorService
 from deeptutor_integration.api import create_router as create_deeptutor_router
 from deeptutor_integration.contracts import DocumentInput
 from deeptutor_integration.errors import DeepTutorError
+from deeptutor_integration.verified_publication import VerifiedPublicationService
 from backend.services.ai.deepseek_provider import DeepSeekProvider
 from backend.services.ai.fallback_provider import FallbackAIProvider
 from backend.services.ai.grounded_chat import GroundedChatService
@@ -67,6 +68,7 @@ from backend.services.ai.ollama_provider import OllamaProvider
 from backend.services.ai.orchestrator import AIOrchestrator
 from grounded_chat_router import create_grounded_chat_router
 from course_query_auth import create_moodle_query_authorizer
+from verified_identity_router import create_identity_router
 from moodle_adapter import MoodleAdapter
 from moodle_ingestion_router import create_moodle_ingestion_router
 from moodle_service_auth import create_moodle_service_dependency, require_moodle_service
@@ -109,14 +111,23 @@ ODBC_DRIVER = os.getenv(
 
 DEEPTUTOR_CONFIG = DeepTutorConfig.from_env(Path(PROJECT_ROOT))
 DEEPTUTOR_SERVICE = DeepTutorService(DEEPTUTOR_CONFIG)
-QUERY_AUTHORIZER = create_moodle_query_authorizer(DEEPTUTOR_SERVICE, os.getenv("MOODLE_BASE_URL"))
+VERIFIED_PUBLICATIONS = VerifiedPublicationService(DEEPTUTOR_CONFIG)
+from deeptutor_integration.moodle_trust import MoodleRest,MoodleCoreCapabilityEvidence
+_capability_token=os.getenv("MOODLE_CAPABILITY_SERVICE_TOKEN")
+try:
+    _capability_evidence=MoodleCoreCapabilityEvidence(MoodleRest(os.getenv("MOODLE_BASE_URL") or ""),_capability_token) if _capability_token else None
+except ValueError:
+    _capability_evidence=None
+QUERY_AUTHORIZER = create_moodle_query_authorizer(DEEPTUTOR_SERVICE,os.getenv("MOODLE_BASE_URL"),
+    capability_evidence=_capability_evidence,file_credential_parameter=os.getenv("MOODLE_FILE_CREDENTIAL_PARAMETER","token"),forbidden_tokens=(os.getenv("MOODLE_TOKEN"),os.getenv("LMS_MOODLE_DISCOVERY_TOKEN"),_capability_token))
+app.include_router(create_identity_router(QUERY_AUTHORIZER))
 DEEPTUTOR_DIR = str(DEEPTUTOR_CONFIG.deeptutor_dir)
 DEEPTUTOR_EXE = str(DEEPTUTOR_CONFIG.executable)
 
 app.include_router(create_deeptutor_router(
     DEEPTUTOR_SERVICE,
     write_authorizer=create_moodle_service_dependency(os.getenv("LMS_MOODLE_DISCOVERY_TOKEN")),
-    query_authorizer=QUERY_AUTHORIZER,
+    query_authorizer=QUERY_AUTHORIZER, publication_service=VERIFIED_PUBLICATIONS,
 ))
 
 try:
@@ -126,7 +137,7 @@ except ValueError:
 app.include_router(create_moodle_ingestion_router(
     MOODLE_ADAPTER,
     DEEPTUTOR_SERVICE,
-    service_token=os.getenv("LMS_MOODLE_DISCOVERY_TOKEN"),
+    service_token=os.getenv("LMS_MOODLE_DISCOVERY_TOKEN"), publication_service=VERIFIED_PUBLICATIONS,
 ))
 
 _deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -143,6 +154,7 @@ GROUNDED_CHAT_SERVICE = (
 )
 app.include_router(create_grounded_chat_router(
     DEEPTUTOR_SERVICE, GROUNDED_CHAT_SERVICE, query_authorizer=QUERY_AUTHORIZER,
+    publication_service=VERIFIED_PUBLICATIONS,
 ))
 app.include_router(create_readiness_router(DEEPTUTOR_SERVICE, _ollama_provider, MOODLE_ADAPTER))
 
@@ -180,11 +192,20 @@ def get_connection():
 
 # ==============================================================================
 LEARNING_EVIDENCE = LearningEvidenceRepository(get_connection)
-app.include_router(create_quiz_router(QuizRepository(get_connection, LEARNING_EVIDENCE)))
-app.include_router(create_learning_router(LEARNING_EVIDENCE))
+QUIZ_REPOSITORY = QuizRepository(get_connection, LEARNING_EVIDENCE)
+from verified_learning_repository import VerifiedLearningRepository
+from verified_learning_router import create_verified_learning_router
+VERIFIED_LEARNING = VerifiedLearningRepository(get_connection, QUIZ_REPOSITORY, LEARNING_EVIDENCE)
+app.include_router(create_verified_learning_router(QUERY_AUTHORIZER,VERIFIED_PUBLICATIONS,VERIFIED_LEARNING,
+    GROUNDED_CHAT_SERVICE.orchestrator,GROUNDED_CHAT_SERVICE,RecommendationService(GROUNDED_CHAT_SERVICE.orchestrator)))
+from legacy_route_security import create_learning_scope_dependency,resource_owner_lookup
+_LEARNING_SCOPE=create_learning_scope_dependency(QUERY_AUTHORIZER,resource_owner_lookup(get_connection))
+_LEARNING_WRITER=create_moodle_service_dependency(os.getenv("LMS_MOODLE_DISCOVERY_TOKEN"))
+app.include_router(create_quiz_router(QUIZ_REPOSITORY,scope_dependency=_LEARNING_SCOPE,writer_dependency=_LEARNING_WRITER))
+app.include_router(create_learning_router(LEARNING_EVIDENCE,scope_dependency=_LEARNING_SCOPE,writer_dependency=_LEARNING_WRITER))
 app.include_router(create_workflow_router(
     LearningWorkflowRepository(get_connection, LEARNING_EVIDENCE),
-    RecommendationService(GROUNDED_CHAT_SERVICE.orchestrator),
+    RecommendationService(GROUNDED_CHAT_SERVICE.orchestrator),scope_dependency=_LEARNING_SCOPE,
 ))
 
 # 7. GENERAL HELPERS
@@ -738,7 +759,6 @@ def root():
     return {
         "status": "ok",
         "message": "LMS DeepTutor Backend dang ho?t d?ng",
-        "database": DATABASE,
         "deeptutor_connected": deeptutor_available
     }
 
@@ -1772,6 +1792,8 @@ def delete_chat_history(
 
 # ==============================================================================
 # 24. RUN
+from legacy_route_security import install_legacy_security, resource_owner_lookup
+install_legacy_security(app, QUERY_AUTHORIZER, resource_owner_lookup(get_connection))
 # ==============================================================================
 
 if __name__ == "__main__":

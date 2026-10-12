@@ -13,6 +13,9 @@ from quiz_lifecycle import (  # noqa: E402
     QuizDefinitionRequest, QuizRepository, StartAttemptRequest, _trusted_questions,
     _validate_answers, _public_submission_result, create_quiz_router,
 )
+from backend.services.ai.learning_context import LearningScope
+SCOPE = LearningScope(owner_id="student-1", course_id="course-1")
+
 from backend.services.ai.grading_service import GradingService  # noqa: E402
 from backend.services.ai.quiz_service import QuizService  # noqa: E402
 from learning_evidence import FlashcardRegistration, FlashcardReviewRequest, LearningEvidenceRepository  # noqa: E402
@@ -53,10 +56,10 @@ class MemoryCursor:
         if statement.startswith("SET XACT_ABORT"):
             self.conn.snapshot = copy.deepcopy(state)
         elif statement.startswith("INSERT INTO dbo.QuizDefinitions"):
-            quiz_id, course_id, topic, difficulty, questions_json, created_at = values
-            state["definitions"][quiz_id] = (course_id, topic, difficulty, questions_json, created_at)
+            quiz_id, course_id, topic, difficulty, questions_json, created_at, context_json = values
+            state["definitions"][quiz_id] = (course_id, topic, difficulty, questions_json, context_json, created_at)
         elif statement.startswith("SELECT course_id, topic, difficulty"):
-            row = state["definitions"].get(values[0]); self.result = None if row is None else Row(row[:4])
+            row = state["definitions"].get(values[0]); self.result = None if row is None else Row(row[:5])
         elif statement.startswith("SELECT attempt_id, started_at"):
             self.result = next((Row((a["id"], a["started_at"])) for a in state["attempts"].values()
                                 if a["quiz_id"] == values[0] and a["student_id"] == values[1] and a["status"] == "IN_PROGRESS"), None)
@@ -66,7 +69,7 @@ class MemoryCursor:
                 raise RuntimeError("filtered unique index")
             state["attempts"][attempt_id] = {"id": attempt_id, "quiz_id": quiz_id, "student_id": student_id, "course_id": course_id, "status": "IN_PROGRESS", "started_at": started_at, "submitted_at": None}
         elif statement.startswith("SELECT quiz_id, status"):
-            attempt = state["attempts"].get(values[0]); self.result = None if attempt is None else Row((attempt["quiz_id"], attempt["status"]))
+            attempt = state["attempts"].get(values[0]); self.result = None if attempt is None else Row((attempt["quiz_id"], attempt["status"], attempt["student_id"], attempt["course_id"]))
         elif statement.startswith("INSERT INTO dbo.QuizAnswers"):
             if state.get("fail_answers"):
                 raise RuntimeError("simulated write failure")
@@ -117,12 +120,12 @@ def test_start_is_idempotent_and_enforces_course_and_quiz():
 def test_submit_persists_deterministic_grading_and_rejects_second_submit():
     state, repo = state_repo(); stored_quiz(repo)
     attempt = repo.start(StartAttemptRequest(quiz_id="quiz-1", course_id="course-1", student_id="student-1"))
-    result = repo.submit(attempt["attempt_id"], [{"question_id": "q1", "selected_option_id": "a"}], GradingService())
+    result = repo.submit(attempt["attempt_id"], [{"question_id": "q1", "selected_option_id": "a"}], GradingService(), scope=SCOPE)
     assert result["score_percent"] == 100 and state["answers"][(attempt["attempt_id"], "q1")] == ("a", True)
     assert state["attempts"][attempt["attempt_id"]]["status"] == "SUBMITTED"
     assert isinstance(state["attempts"][attempt["attempt_id"]]["submitted_at"], datetime)
     with pytest.raises(ValueError, match="already_submitted"):
-        repo.submit(attempt["attempt_id"], [], GradingService())
+        repo.submit(attempt["attempt_id"], [], GradingService(), scope=SCOPE)
 
 
 @pytest.mark.parametrize("answers, code", [
@@ -140,7 +143,7 @@ def test_submission_rollback_leaves_no_partial_answers_or_status_change():
     attempt = repo.start(StartAttemptRequest(quiz_id="quiz-1", course_id="course-1", student_id="student-1"))
     state["fail_answers"] = True
     with pytest.raises(ValueError, match="persistence_failure"):
-        repo.submit(attempt["attempt_id"], [{"question_id": "q1", "selected_option_id": "a"}], GradingService())
+        repo.submit(attempt["attempt_id"], [{"question_id": "q1", "selected_option_id": "a"}], GradingService(), scope=SCOPE)
     assert state["answers"] == {}
     assert state["attempts"][attempt["attempt_id"]]["status"] == "IN_PROGRESS"
 
@@ -153,7 +156,7 @@ def test_definition_is_reloaded_by_a_fresh_repository_instance():
 
 def test_http_contract_is_public_safe_and_sanitizes_errors():
     _, repo = state_repo()
-    app = FastAPI(); app.include_router(create_quiz_router(repo))
+    app = FastAPI(); app.include_router(create_quiz_router(repo, scope_dependency=lambda: SCOPE, writer_dependency=lambda: None))
     with TestClient(app) as client:
         created = client.post("/internal/quizzes", json={
             "quiz_id": "quiz-1", "course_id": "course-1", "topic": "topic",
@@ -168,7 +171,7 @@ def test_http_contract_is_public_safe_and_sanitizes_errors():
 
 def test_http_submit_response_projects_only_grading_facts():
     _, repo = state_repo()
-    app = FastAPI(); app.include_router(create_quiz_router(repo))
+    app = FastAPI(); app.include_router(create_quiz_router(repo, scope_dependency=lambda: SCOPE, writer_dependency=lambda: None))
     with TestClient(app) as client:
         client.post("/internal/quizzes", json={
             "quiz_id": "quiz-1", "course_id": "course-1", "topic": "topic",
@@ -220,10 +223,10 @@ class EvidenceCursor:
     def execute(self, sql, *values):
         sql, s = " ".join(sql.split()), self.conn.state
         if sql.startswith("SET XACT_ABORT"): self.conn.snapshot = copy.deepcopy(s)
-        elif sql.startswith("SELECT course_id, topic FROM dbo.Flashcards"):
+        elif sql.startswith("SELECT course_id, topic, artifact_json FROM dbo.Flashcards"):
             row = s["cards"].get(values[0]); self.result = Row(row) if row else None
         elif sql.startswith("INSERT INTO dbo.Flashcards"):
-            s["cards"][values[0]] = (values[1], values[2])
+            s["cards"][values[0]] = (values[1], values[2], values[4])
         elif sql.startswith("SELECT student_id, flashcard_id, rating FROM dbo.FlashcardReviews"):
             review = s["reviews"].get(values[0]); self.result = Row((review[0], review[1], review[2])) if review else None
         elif sql.startswith("INSERT INTO dbo.FlashcardReviews"):
@@ -256,27 +259,27 @@ def evidence_repo():
 
 def test_flashcard_registry_review_idempotency_and_server_scope():
     state, repo = evidence_repo()
-    repo.register_flashcard(FlashcardRegistration(flashcard_id="card-1", course_id="course-1", topic="topic-1"))
-    repo.register_flashcard(FlashcardRegistration(flashcard_id="card-1", course_id="course-1", topic="topic-1"))
-    result = repo.review("card-1", FlashcardReviewRequest(student_id="student-1", rating="GOOD", review_id="review-1"))
+    repo.register_flashcard(FlashcardRegistration(flashcard_id="card-1", course_id="course-1", topic="topic-1", front_text="Front", back_text="Back", owner_id="student-1"))
+    repo.register_flashcard(FlashcardRegistration(flashcard_id="card-1", course_id="course-1", topic="topic-1", front_text="Front", back_text="Back", owner_id="student-1"))
+    result = repo.review("card-1", FlashcardReviewRequest(student_id="student-1", rating="GOOD", review_id="review-1"), scope=SCOPE)
     assert result["mastery"]["mastery_score"] == 75
     assert state["events"] == [{"student_id": "student-1", "course_id": "course-1", "topic": "topic-1", "type": "flashcard", "correct": None, "rating": "GOOD"}]
-    assert repo.review("card-1", FlashcardReviewRequest(student_id="student-1", rating="GOOD", review_id="review-1"))["status"] == "RECORDED"
+    assert repo.review("card-1", FlashcardReviewRequest(student_id="student-1", rating="GOOD", review_id="review-1"), scope=SCOPE)["status"] == "RECORDED"
     assert len(state["reviews"]) == len(state["events"]) == 1
+    with pytest.raises(ValueError, match="learning_scope_forbidden"):
+        repo.review("card-1", FlashcardReviewRequest(student_id="student-2", rating="GOOD", review_id="review-1"), scope=SCOPE)
     with pytest.raises(ValueError, match="idempotency_conflict"):
-        repo.review("card-1", FlashcardReviewRequest(student_id="student-2", rating="GOOD", review_id="review-1"))
-    with pytest.raises(ValueError, match="idempotency_conflict"):
-        repo.review("card-1", FlashcardReviewRequest(student_id="student-1", rating="EASY", review_id="review-1"))
+        repo.review("card-1", FlashcardReviewRequest(student_id="student-1", rating="EASY", review_id="review-1"), scope=SCOPE)
 
 
 def test_unknown_card_and_event_failure_roll_back_review_path():
     state, repo = evidence_repo()
     with pytest.raises(ValueError, match="flashcard_not_found"):
-        repo.review("forged", FlashcardReviewRequest(student_id="student-1", rating="GOOD", review_id="review-1"))
+        repo.review("forged", FlashcardReviewRequest(student_id="student-1", rating="GOOD", review_id="review-1"), scope=SCOPE)
     assert not state["reviews"] and not state["events"] and not state["mastery"]
-    repo.register_flashcard(FlashcardRegistration(flashcard_id="card-1", course_id="course-1", topic="topic-1")); state["fail_event"] = True
+    repo.register_flashcard(FlashcardRegistration(flashcard_id="card-1", course_id="course-1", topic="topic-1", front_text="Front", back_text="Back", owner_id="student-1")); state["fail_event"] = True
     with pytest.raises(ValueError, match="persistence_failure"):
-        repo.review("card-1", FlashcardReviewRequest(student_id="student-1", rating="GOOD", review_id="review-1"))
+        repo.review("card-1", FlashcardReviewRequest(student_id="student-1", rating="GOOD", review_id="review-1"), scope=SCOPE)
     assert not state["reviews"] and not state["events"] and not state["mastery"]
 
 
@@ -295,11 +298,11 @@ class WorkflowConnection:
 class WorkflowCursor:
     def __init__(self, state): self.state, self.result = state, None
     def execute(self, sql, *values):
-        if sql.startswith("SELECT quiz_id, student_id, status FROM dbo.QuizAttempts"):
+        if sql.startswith("SELECT quiz_id, student_id, status, course_id FROM dbo.QuizAttempts"):
             row = self.state.get("attempt") if values[0] == "attempt-1" else None
             self.result = Row(row) if row else None
         elif sql.startswith("SELECT questions_json"):
-            self.result = Row(("[]",))
+            self.result = Row(("[]", None, "course-1"))
         elif sql.startswith("SELECT question_id, selected_option_id, correct"):
             self.result = [Row(row) for row in self.state["answers"]]
         return self
@@ -308,17 +311,17 @@ class WorkflowCursor:
 
 
 def test_review_uses_submitted_owner_state_and_is_safely_degraded():
-    state = {"attempt": ("quiz-1", "student-1", "SUBMITTED"), "answers": [("q1", "b", False), ("q2", "a", True)]}
+    state = {"attempt": ("quiz-1", "student-1", "SUBMITTED", "course-1"), "answers": [("q1", "b", False), ("q2", "a", True)]}
     repo = LearningWorkflowRepository(lambda: WorkflowConnection(state), object())
-    review = repo.review("attempt-1", "student-1")
+    review = repo.review("attempt-1", "student-1", scope=SCOPE)
     assert review == {"attempt_id": "attempt-1", "results": [{"question_id": "q1", "correct": False, "explanation_status": "unavailable"}]}
     with pytest.raises(ValueError, match="attempt_not_owned"):
-        repo.review("attempt-1", "student-2")
+        repo.review("attempt-1", "student-2", scope=SCOPE)
     with pytest.raises(ValueError, match="attempt_not_found"):
-        repo.review("missing", "student-1")
-    state["attempt"] = ("quiz-1", "student-1", "IN_PROGRESS")
+        repo.review("missing", "student-1", scope=SCOPE)
+    state["attempt"] = ("quiz-1", "student-1", "IN_PROGRESS", "course-1")
     with pytest.raises(ValueError, match="attempt_not_submitted"):
-        repo.review("attempt-1", "student-1")
+        repo.review("attempt-1", "student-1", scope=SCOPE)
 
 
 @pytest.mark.parametrize("invalid", ["duplicate_id", "duplicate_question", "duplicate_option", "invalid_key", "missing_field"])

@@ -25,7 +25,28 @@ After initial setup, create a least-privilege integration user, enable Web Servi
 - `core_course_get_enrolled_courses_by_timeline_classification`
 - `mod_resource_get_resources_by_courses`
 
+For the personal-token trust boundary, each user's personal Moodle external
+service must expose `core_webservice_get_site_info`,
+`core_enrol_get_users_courses`, and (for lecturer document sync)
+`mod_resource_get_resources_by_courses`. A separate capability evidence service
+uses `core_enrol_get_enrolled_users_with_capability` with Moodle-approved
+least-privilege permissions. See [Moodle trust contract](MOODLE_TRUST_CONTRACT.md)
+for the exact user, course, capability, and lifecycle rules.
+
 Create a token for that integration user. Store it only in ignored `.env` as `MOODLE_TOKEN`; set `MOODLE_BASE_URL=http://127.0.0.1:8088`. Never place the token in Compose, source code, screenshots, or Git.
+
+`MoodleAdapter` always sends this credential to Moodle REST as `wstoken`.
+For file downloads, Moodle's ordinary `pluginfile` transport expects `token` and
+that is the default. If the deployed Moodle file endpoint explicitly requires a
+web-service token parameter instead, set the ignored environment variable
+`MOODLE_FILE_CREDENTIAL_PARAMETER=wstoken`. No other credential parameter name
+is accepted, and tokens must never be embedded in `MOODLE_BASE_URL` or persisted
+as part of source metadata.
+
+Every `SourceDocument` includes a SHA-256 `content_hash` derived from the
+downloaded bytes. It is distinct from Moodle's optional `source_version_hint`:
+the latter is provenance metadata and must not be treated as proof that content
+changed.
 
 ## INT1339 migration
 

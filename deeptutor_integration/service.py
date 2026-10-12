@@ -79,10 +79,18 @@ class DeepTutorService:
             if not path.is_file():
                 raise DeepTutorError("invalid_document", "Document path does not exist.", status_code=422)
             return path
-        self.config.runtime_dir.mkdir(parents=True, exist_ok=True)
-        target_dir = self.config.runtime_dir / "documents" / document.course_id / document.document_id
+        runtime = self.config.runtime_dir.resolve()
+        if not runtime.is_relative_to(self.config.repository_root.resolve()):
+            raise DeepTutorError("invalid_document", "Runtime path is outside the workspace.", status_code=422)
+        for value in (document.course_id, document.document_id, document.filename):
+            if value in {".", ".."} or any(c in value for c in ("/", "\\", ":", "\0")):
+                raise DeepTutorError("invalid_document", "Document path identifier is invalid.", status_code=422)
+        root = (runtime / "documents").resolve()
+        target_dir = root / document.course_id / document.document_id
+        target = (target_dir / document.filename).resolve()
+        if not root.is_relative_to(runtime) or not target.is_relative_to(root):
+            raise DeepTutorError("invalid_document", "Document path is outside the staging root.", status_code=422)
         target_dir.mkdir(parents=True, exist_ok=True)
-        target = target_dir / document.filename
         target.write_text(document.content or "", encoding="utf-8")
         return target
 

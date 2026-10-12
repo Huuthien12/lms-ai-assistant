@@ -57,7 +57,7 @@ class FlashcardService:
         if not isinstance(data, dict):
             raise ValueError("INVALID_FLASHCARD_SCHEMA")
         cards = data.get("flashcards")
-        if not isinstance(cards, list) or not cards:
+        if not isinstance(cards, list) or not 1 <= len(cards) <= 50:
             raise ValueError("INVALID_FLASHCARD_SCHEMA")
         validated_cards = []
         card_pairs = set()
@@ -67,9 +67,9 @@ class FlashcardService:
             front = card.get("front_text", card.get("front"))
             back = card.get("back_text", card.get("back"))
             topic, difficulty = card.get("topic"), card.get("difficulty")
-            if not isinstance(front, str) or not front.strip():
+            if not isinstance(front, str) or not front.strip() or len(front) > 8000:
                 raise ValueError("INVALID_FLASHCARD_SCHEMA")
-            if not isinstance(back, str) or not back.strip():
+            if not isinstance(back, str) or not back.strip() or len(back) > 16000:
                 raise ValueError("INVALID_FLASHCARD_SCHEMA")
             pair = (" ".join(front.casefold().split()), " ".join(back.casefold().split()))
             if pair in card_pairs:

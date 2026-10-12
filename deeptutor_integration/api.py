@@ -29,6 +29,7 @@ def create_router(
     service: DeepTutorService,
     write_authorizer: Callable[..., None] | None = None,
     query_authorizer: Callable[..., QueryAccessChecker] | None = None,
+    publication_service=None,
 ) -> APIRouter:
     router = APIRouter(prefix="/deeptutor", tags=["DeepTutor integration"])
     write_dependency = Depends(write_authorizer or _write_auth_not_configured)
@@ -61,6 +62,15 @@ def create_router(
         if not callable(authorize_query):
             _query_auth_not_configured()
         authorize_query(request)
+        if publication_service is not None:
+            def verified_query():
+                scope=authorize_query.scope(request.course_id,request.kb_id)
+                with publication_service.context(scope,request.question) as context:
+                    authorize_query.reauthorize(scope)
+                    publication_service.revalidate(context)
+                    return {"course_id":scope.course_key,"kb_id":scope.kb_name,"context_id":context.context_id,
+                            "result":{"sources":[{**c.citation(),"content":c.content} for c in context.chunks]}}
+            return call(verified_query)
         return call(lambda: service.query(request))
 
     return router
