@@ -144,6 +144,7 @@ _deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
 _ollama_provider = OllamaProvider(
     model=os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
     base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+    timeout_seconds=float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120")),
 )
 GROUNDED_CHAT_SERVICE = (
     GroundedChatService(AIOrchestrator(FallbackAIProvider(
