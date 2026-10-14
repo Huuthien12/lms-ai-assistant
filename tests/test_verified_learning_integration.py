@@ -141,6 +141,17 @@ def test_malformed_provider_output_creates_no_trusted_artifact(learning):
     assert not state["definitions"] and not state["bindings"]
 
 
+def test_provider_timeout_returns_502_without_persistence(learning):
+    client,_,state,orch,_,_=learning
+    before=deepcopy(state); orch.generate.side_effect=None
+    orch.generate.return_value=LLMResult(
+        "error","ollama","qwen2.5:3b","",30000,error_code="TIMEOUT_OR_NETWORK_ERROR")
+    response=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation())
+    assert response.status_code==502
+    assert response.json()["detail"]["code"]=="QUIZ_GENERATION_FAILED"
+    assert state==before
+
+
 @pytest.mark.parametrize("path",["quizzes","flashcards"])
 def test_learning_update_delete_never_sends_old_context_to_provider(learning,path):
     client,store,_,orch,pub,_=learning
