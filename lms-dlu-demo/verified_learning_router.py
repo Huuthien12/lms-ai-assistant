@@ -1,14 +1,15 @@
 """One verified application flow into Quan's existing learning domains."""
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+import time
 from typing import Literal
 from uuid import uuid4
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.routing import APIRoute
 from fastapi.exceptions import RequestValidationError
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from backend.services.ai.quiz_service import QuizService
+from backend.services.ai.quiz_service import QuizService, record_quiz_stage
 from backend.services.ai.flashcard_service import FlashcardService
 from backend.services.ai.explanation_service import ExplanationService
 from backend.services.ai.grading_service import GradingService
@@ -30,6 +31,9 @@ class SafeLearningRoute(APIRoute):
     def get_route_handler(self):
         handler=super().get_route_handler()
         async def safe(request):
+            if request.method == "POST" and request.url.path.endswith("/quizzes"):
+                request.state.quiz_correlation_id = uuid4().hex
+                request.state.quiz_started_at = time.monotonic()
             try: return await handler(request)
             except HTTPException: raise
             except AuthContractError as error: raise HTTPException(error.status_code,detail=error.public_payload()) from None
@@ -49,6 +53,9 @@ class SafeLearningRoute(APIRoute):
                 raise HTTPException(status,detail={"code":code,"message":"Learning request could not be completed."}) from None
             except Exception:
                 raise HTTPException(503,detail={"code":"learning_dependency_unavailable","message":"Learning dependency is unavailable."}) from None
+            finally:
+                if hasattr(request.state,"quiz_started_at") and not getattr(request.state,"quiz_authorization_recorded",False):
+                    record_quiz_stage(request.state.quiz_correlation_id,"authorization_pre_generation","failed",(time.monotonic()-request.state.quiz_started_at)*1000)
         return safe
 
 
@@ -111,7 +118,7 @@ def create_verified_learning_router(authorizer,publications,repository,orchestra
     quizzes=QuizService(orchestrator); cards=FlashcardService(orchestrator); explanations=ExplanationService(orchestrator)
     grader=GradingService(); moodle=MoodlePublicationAdapter(publications)
 
-    async def generate_with_authority(access,context,kind,request):
+    async def generate_with_authority(access,context,kind,request,correlation_id=None):
         failures=[]
         def validate(scope,learning):
             try: return publications.validate_learning_context(scope,learning,access)
@@ -121,7 +128,7 @@ def create_verified_learning_router(authorizer,publications,repository,orchestra
         learning=publications.learning_context(context)
         try:
             if kind=="quiz":
-                return await generation.generate_quiz(learning.scope,learning,topic=request.topic,question_count=request.count,difficulty=request.difficulty)
+                return await generation.generate_quiz(learning.scope,learning,topic=request.topic,question_count=request.count,difficulty=request.difficulty,correlation_id=correlation_id)
             return await generation.generate_flashcards(learning.scope,learning,topic=request.topic,count=request.count,difficulty=request.difficulty)
         except ValueError:
             if failures: raise failures[-1]
@@ -186,13 +193,32 @@ def create_verified_learning_router(authorizer,publications,repository,orchestra
         repository.clear_history(access.scope(course_id)); return {"status":"cleared"}
 
     @router.post("/courses/{course_id}/quizzes")
-    async def generate_quiz(course_id:str,request:GenerationInput,access=Depends(authorizer)):
+    async def generate_quiz(course_id:str,request:GenerationInput,http_request:Request,access=Depends(authorizer)):
+        correlation_id=getattr(http_request.state,"quiz_correlation_id",uuid4().hex)
+        request_started=getattr(http_request.state,"quiz_started_at",time.monotonic())
         scope=await run_in_threadpool(access.scope,course_id,request.kb_name)
-        async with learning_context(publications,scope,request.question) as context:
-            generated=await generate_with_authority(access,context,"quiz",request)
-            await run_in_threadpool(repository.put,"quiz",generated["quiz_id"],scope,{"context":context_payload(context)})
-            # Public projection comes from Quan, with stable IDs and no raw context.
-            return {**generated,"topic":request.topic,"context_id":context.context_id,"sources":publications.learning_context(context).source_metadata()}
+        record_quiz_stage(correlation_id,"authorization_pre_generation","passed",(time.monotonic()-request_started)*1000)
+        http_request.state.quiz_authorization_recorded=True
+        retrieval_started=time.monotonic(); retrieval_finished=False
+        try:
+            async with learning_context(publications,scope,request.question) as context:
+                record_quiz_stage(correlation_id,"retrieval_context","passed",(time.monotonic()-retrieval_started)*1000)
+                retrieval_finished=True
+                generated=await generate_with_authority(access,context,"quiz",request,correlation_id)
+                artifact_started=time.monotonic()
+                record_quiz_stage(correlation_id,"artifact_persistence","started",0)
+                try:
+                    await run_in_threadpool(repository.put,"quiz",generated["quiz_id"],scope,{"context":context_payload(context)})
+                except Exception:
+                    record_quiz_stage(correlation_id,"artifact_persistence","failed",(time.monotonic()-artifact_started)*1000)
+                    raise
+                record_quiz_stage(correlation_id,"artifact_persistence","passed",(time.monotonic()-artifact_started)*1000)
+                # Public projection comes from Quan, with stable IDs and no raw context.
+                return {**generated,"topic":request.topic,"context_id":context.context_id,"sources":publications.learning_context(context).source_metadata()}
+        except Exception:
+            if not retrieval_finished:
+                record_quiz_stage(correlation_id,"retrieval_context","failed",(time.monotonic()-retrieval_started)*1000)
+            raise
 
     @router.get("/quizzes/{quiz_id}")
     async def quiz(quiz_id:str,access=Depends(authorizer)):

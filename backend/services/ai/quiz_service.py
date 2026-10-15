@@ -1,9 +1,57 @@
 import json
+import logging
+import re
+import time
 from copy import deepcopy
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 from backend.services.ai.orchestrator import AIOrchestrator
-from backend.services.ai.provider_base import LLMResult
+from backend.services.ai.provider_base import LLMResult, safe_result
+
+
+logger = logging.getLogger("uvicorn.error")
+_SAFE_DIAGNOSTIC = re.compile(r"^[A-Za-z0-9._:/-]{1,128}$")
+
+
+class _QuizSemanticValidationError(ValueError):
+    pass
+
+
+def _safe_diagnostic(value: Any) -> str:
+    return value if isinstance(value, str) and _SAFE_DIAGNOSTIC.fullmatch(value) else "unknown"
+
+
+def record_quiz_stage(
+    correlation_id: str, stage: str, result: str, elapsed_ms: float, *,
+    provider: Any = None, model: Any = None, fallback_used: Any = None,
+    error_code: Any = None,
+) -> None:
+    """Log only allowlisted Quiz diagnostics; never accept content-bearing fields."""
+    payload = {
+        "correlation_id": _safe_diagnostic(correlation_id),
+        "stage": _safe_diagnostic(stage),
+        "result": _safe_diagnostic(result),
+        "elapsed_ms": round(max(0.0, float(elapsed_ms)), 2),
+    }
+    if provider is not None:
+        payload["provider"] = _safe_diagnostic(provider)
+    if model is not None:
+        payload["model"] = _safe_diagnostic(model)
+    if fallback_used is not None:
+        payload["fallback_used"] = fallback_used is True
+    if error_code is not None:
+        code = _safe_diagnostic(error_code)
+        payload["provider_error_code"] = code
+        payload["provider_error_category"] = {
+            "TIMEOUT_OR_NETWORK_ERROR": "timeout_or_network",
+            "RATE_LIMIT": "rate_limit",
+            "SERVICE_UNAVAILABLE": "service_unavailable",
+            "INVALID_RESPONSE": "invalid_response",
+            "INVALID_REQUEST": "invalid_request",
+            "MAX_RETRIES_EXCEEDED": "retry_exhausted",
+        }.get(code, "http_error" if code.startswith("HTTP_") else "unknown")
+    logger.info("quiz_observability %s", json.dumps(payload, sort_keys=True, separators=(",", ":")))
 
 
 class QuizService:
@@ -39,35 +87,40 @@ class QuizService:
     ) -> tuple[str, str]:
         evidence = question.get("grounding_evidence")
         if not isinstance(evidence, str) or not evidence.strip() or len(evidence) > 8000:
-            raise ValueError("INVALID_QUIZ_SCHEMA: unsupported grounding")
+            raise _QuizSemanticValidationError("INVALID_QUIZ_SCHEMA: unsupported grounding")
         normalized_context = cls._normalize_grounding_text(context)
         normalized_evidence = cls._normalize_grounding_text(evidence)
         if normalized_evidence not in normalized_context:
-            raise ValueError("INVALID_QUIZ_SCHEMA: unsupported grounding")
+            raise _QuizSemanticValidationError("INVALID_QUIZ_SCHEMA: unsupported grounding")
         correct_text = next(option["text"] for option in options if option["id"] == correct_id)
         normalized_answer = cls._normalize_grounding_text(correct_text)
         answer_start = normalized_evidence.find(normalized_answer)
         if (answer_start < 0
                 or normalized_evidence.find(normalized_answer, answer_start + 1) >= 0):
-            raise ValueError("INVALID_QUIZ_SCHEMA: unsupported grounding")
+            raise _QuizSemanticValidationError("INVALID_QUIZ_SCHEMA: unsupported grounding")
         before = normalized_evidence[:answer_start]
         after = normalized_evidence[answer_start + len(normalized_answer):]
         if not before.strip() and not after.strip():
-            raise ValueError("INVALID_QUIZ_SCHEMA: unsupported grounding")
+            raise _QuizSemanticValidationError("INVALID_QUIZ_SCHEMA: unsupported grounding")
         expected_question = (
             cls.GROUNDING_QUESTION_PREFIX + before + cls.GROUNDING_BLANK + after
         )
         if (len(expected_question) > 8000
                 or cls._normalize_grounding_text(question_text) != expected_question):
-            raise ValueError("INVALID_QUIZ_SCHEMA: unsupported grounding")
+            raise _QuizSemanticValidationError("INVALID_QUIZ_SCHEMA: unsupported grounding")
         return expected_question, normalized_evidence
 
     @staticmethod
     def validate_and_parse_quiz(
         raw_content: Any, question_count: Optional[int] = None,
         source_metadata: Any = None, grounding_context: Optional[str] = None,
+        _diagnostics: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Parse and validate internal MCQs; only caller sources are retained."""
+        if _diagnostics is not None:
+            _diagnostics.setdefault("semantic_reached", False)
+            _diagnostics.setdefault("semantic_result", "not_reached")
+            _diagnostics.setdefault("semantic_elapsed_ms", 0.0)
         source_metadata = QuizService._copy_sources(source_metadata)
         try:
             if isinstance(raw_content, dict):
@@ -140,8 +193,20 @@ class QuizService:
                 raise ValueError("INVALID_QUIZ_SCHEMA: answer key not in options")
             grounding = None
             if grounding_context is not None:
-                grounding = QuizService._validated_grounding(
-                    question, text, normalized_options, correct_id.strip(), grounding_context)
+                semantic_started = time.monotonic()
+                if _diagnostics is not None:
+                    _diagnostics["semantic_reached"] = True
+                try:
+                    grounding = QuizService._validated_grounding(
+                        question, text, normalized_options, correct_id.strip(), grounding_context)
+                except _QuizSemanticValidationError:
+                    if _diagnostics is not None:
+                        _diagnostics["semantic_result"] = "rejected"
+                    raise
+                finally:
+                    if _diagnostics is not None:
+                        _diagnostics["semantic_elapsed_ms"] += (
+                            time.monotonic() - semantic_started) * 1000
             validated = {
                 "question": grounding[0] if grounding else text.strip(),
                 "type": "mcq", "options": normalized_options,
@@ -162,6 +227,8 @@ class QuizService:
 
         if question_count is not None and len(validated_questions) != question_count:
             raise ValueError("INVALID_QUIZ_SCHEMA: generated question count mismatch")
+        if _diagnostics is not None and grounding_context is not None:
+            _diagnostics["semantic_result"] = "passed"
         return {"questions": validated_questions}
 
     @staticmethod
@@ -180,7 +247,8 @@ class QuizService:
     async def generate_grounded_quiz(
         self, *, topic: str, question_count: int, difficulty: str,
         question_types: List[str], retrieved_context: str,
-        source_metadata: Any = None, client_facing: bool = True, **kwargs: Any,
+        source_metadata: Any = None, client_facing: bool = True,
+        correlation_id: Optional[str] = None, **kwargs: Any,
     ) -> Dict[str, Any]:
         """Generate from caller retrieval only; opt into internal keys explicitly."""
         source_metadata = self._copy_sources(source_metadata)
@@ -216,16 +284,86 @@ class QuizService:
             "difficulty": difficulty, "question_types": question_types,
             "retrieved_context": retrieved_context,
         }, ensure_ascii=False)
+        correlation_id = correlation_id or uuid4().hex
+        provider_started = time.monotonic()
+        record_quiz_stage(correlation_id, "provider", "started", 0)
         try:
             result = await self.orchestrator.generate(
                 prompt=prompt, system_prompt=system_prompt, **kwargs
             )
         except Exception:
+            record_quiz_stage(
+                correlation_id, "provider", "failed",
+                (time.monotonic() - provider_started) * 1000,
+                provider="unknown", model="unknown", fallback_used=False,
+                error_code="UNKNOWN_ERROR",
+            )
+            record_quiz_stage(correlation_id, "structural_validation", "not_reached", 0)
+            record_quiz_stage(correlation_id, "semantic_validation", "not_reached", 0)
             raise ValueError("QUIZ_GENERATION_FAILED") from None
         if not isinstance(result, LLMResult) or result.status != "success":
+            diagnostic = safe_result(result) if isinstance(result, LLMResult) else None
+            record_quiz_stage(
+                correlation_id, "provider", "failed",
+                (time.monotonic() - provider_started) * 1000,
+                provider=diagnostic.provider if diagnostic else "unknown",
+                model=diagnostic.model if diagnostic else "unknown",
+                fallback_used=diagnostic.fallback_used if diagnostic else False,
+                error_code=diagnostic.error_code if diagnostic else "UNKNOWN_ERROR",
+            )
+            record_quiz_stage(correlation_id, "structural_validation", "not_reached", 0)
+            record_quiz_stage(correlation_id, "semantic_validation", "not_reached", 0)
             raise ValueError("QUIZ_GENERATION_FAILED")
-        internal = self.validate_and_parse_quiz(
-            result.content, question_count, source_metadata, retrieved_context)
+        diagnostic = safe_result(result)
+        record_quiz_stage(
+            correlation_id, "provider", "passed",
+            (time.monotonic() - provider_started) * 1000,
+            provider=diagnostic.provider, model=diagnostic.model,
+            fallback_used=diagnostic.fallback_used,
+        )
+        validation_started = time.monotonic()
+        validation = {
+            "semantic_reached": False, "semantic_result": "not_reached",
+            "semantic_elapsed_ms": 0.0,
+        }
+        record_quiz_stage(correlation_id, "structural_validation", "started", 0)
+        try:
+            internal = self.validate_and_parse_quiz(
+                result.content, question_count, source_metadata, retrieved_context,
+                _diagnostics=validation)
+        except _QuizSemanticValidationError:
+            total_ms = (time.monotonic() - validation_started) * 1000
+            record_quiz_stage(
+                correlation_id, "structural_validation", "passed",
+                max(0.0, total_ms - validation["semantic_elapsed_ms"]),
+            )
+            record_quiz_stage(
+                correlation_id, "semantic_validation", "rejected",
+                validation["semantic_elapsed_ms"],
+            )
+            raise
+        except Exception:
+            total_ms = (time.monotonic() - validation_started) * 1000
+            record_quiz_stage(
+                correlation_id, "structural_validation", "rejected",
+                max(0.0, total_ms - validation["semantic_elapsed_ms"]),
+            )
+            record_quiz_stage(
+                correlation_id, "semantic_validation",
+                (validation["semantic_result"] if validation["semantic_result"] != "not_reached"
+                 else "partial" if validation["semantic_reached"] else "not_reached"),
+                validation["semantic_elapsed_ms"],
+            )
+            raise
+        total_ms = (time.monotonic() - validation_started) * 1000
+        record_quiz_stage(
+            correlation_id, "structural_validation", "passed",
+            max(0.0, total_ms - validation["semantic_elapsed_ms"]),
+        )
+        record_quiz_stage(
+            correlation_id, "semantic_validation", validation["semantic_result"],
+            validation["semantic_elapsed_ms"],
+        )
         return self.to_public_result(internal) if client_facing else internal
 
     async def generate_quiz(

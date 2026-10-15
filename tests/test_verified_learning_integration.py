@@ -1,4 +1,5 @@
 import sys
+import logging
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).parents[1]/"lms-dlu-demo"))
 from copy import deepcopy
@@ -20,6 +21,12 @@ from course_query_auth import create_moodle_query_authorizer
 from deeptutor_integration.service import DeepTutorService
 from test_verified_chat_integration import runtime, document
 from verified_learning_fakes import LearningConnection
+
+
+def quiz_events(caplog):
+    prefix="quiz_observability "
+    return [json.loads(record.getMessage()[len(prefix):]) for record in caplog.records
+            if record.getMessage().startswith(prefix)]
 
 
 @pytest.fixture
@@ -160,15 +167,49 @@ def test_malformed_provider_output_creates_no_trusted_artifact(learning):
     assert not state["definitions"] and not state["bindings"]
 
 
-def test_provider_timeout_returns_502_without_persistence(learning):
+def test_provider_timeout_returns_502_without_persistence(learning,caplog):
     client,_,state,orch,_,_=learning
+    caplog.set_level(logging.INFO,logger="uvicorn.error")
     before=deepcopy(state); orch.generate.side_effect=None
     orch.generate.return_value=LLMResult(
-        "error","ollama","qwen2.5:3b","",30000,error_code="TIMEOUT_OR_NETWORK_ERROR")
+        "error","ollama","qwen2.5:3b","SECRET_PROVIDER_BODY",30000,
+        error_code="TIMEOUT_OR_NETWORK_ERROR")
     response=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation())
     assert response.status_code==502
-    assert response.json()["detail"]["code"]=="QUIZ_GENERATION_FAILED"
+    assert response.json()["detail"]=={
+        "code":"QUIZ_GENERATION_FAILED",
+        "message":"Learning request could not be completed."}
     assert state==before
+    events=quiz_events(caplog)
+    assert {(event["stage"],event["result"]) for event in events}>={
+        ("authorization_pre_generation","passed"),("retrieval_context","passed"),
+        ("provider","started"),("provider","failed"),
+        ("structural_validation","not_reached"),
+        ("semantic_validation","not_reached"),("persistence","not_reached")}
+    assert len({event["correlation_id"] for event in events})==1
+    assert not any(stage.startswith("artifact_persistence") for stage in
+                   (event["stage"] for event in events))
+    assert "SECRET_PROVIDER_BODY" not in caplog.text
+    assert "trusted full lecture context" not in caplog.text
+    assert all(event["elapsed_ms"]>=0 for event in events)
+    orch.generate.assert_awaited_once()
+
+
+def test_success_observability_reaches_persistence_without_private_content(learning,caplog):
+    client,_,state,orch,_,_=learning
+    caplog.set_level(logging.INFO,logger="uvicorn.error")
+    response=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation())
+    assert response.status_code==200 and len(state["definitions"])==1
+    events=quiz_events(caplog)
+    assert {(event["stage"],event["result"]) for event in events}>={
+        ("authorization_pre_generation","passed"),("retrieval_context","passed"),
+        ("provider","passed"),("structural_validation","passed"),
+        ("semantic_validation","passed"),("persistence","passed"),
+        ("artifact_persistence","passed")}
+    assert len({event["correlation_id"] for event in events})==1
+    assert "trusted full lecture context" not in caplog.text
+    assert "correct_option_id" not in caplog.text
+    orch.generate.assert_awaited_once()
 
 
 @pytest.mark.parametrize("path",["quizzes","flashcards"])

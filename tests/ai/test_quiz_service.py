@@ -1,10 +1,17 @@
 import pytest
 import json
+import logging
 from copy import deepcopy
 from unittest.mock import AsyncMock, MagicMock
 from backend.services.ai.quiz_service import QuizService
 from backend.services.ai.orchestrator import AIOrchestrator
 from backend.services.ai.provider_base import LLMResult
+
+
+def quiz_events(caplog):
+    prefix = "quiz_observability "
+    return [json.loads(record.getMessage()[len(prefix):]) for record in caplog.records
+            if record.getMessage().startswith(prefix)]
 
 @pytest.fixture
 def mock_orchestrator():
@@ -322,7 +329,8 @@ async def test_invalid_output_errors_do_not_expose_raw(mock_orchestrator, raw):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("raises", [False, True])
-async def test_provider_failure_is_safe(mock_orchestrator, raises):
+async def test_provider_failure_is_safe(mock_orchestrator, raises, caplog):
+    caplog.set_level(logging.INFO, logger="uvicorn.error")
     if raises:
         mock_orchestrator.generate.side_effect = RuntimeError("secret provider details")
     else:
@@ -331,6 +339,87 @@ async def test_provider_failure_is_safe(mock_orchestrator, raises):
             content="secret provider details", error_code="private error")
     with pytest.raises(ValueError, match="^QUIZ_GENERATION_FAILED$"):
         await QuizService(mock_orchestrator).generate_grounded_quiz(**grounded_input())
+    assert "secret provider details" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_observability_is_correlated_and_sanitized(
+    mock_orchestrator, caplog,
+):
+    caplog.set_level(logging.INFO, logger="uvicorn.error")
+    mock_orchestrator.generate.return_value = LLMResult(
+        status="error", provider="ollama", model="qwen2.5:3b", latency_ms=120000,
+        content="SECRET_PROVIDER_BODY", error_code="TIMEOUT_OR_NETWORK_ERROR",
+        fallback_used=False)
+    with pytest.raises(ValueError, match="^QUIZ_GENERATION_FAILED$"):
+        await QuizService(mock_orchestrator).generate_grounded_quiz(
+            **grounded_input(retrieved_context="SECRET_CONTEXT", topic="SECRET_TOPIC"),
+            correlation_id="deadbeef")
+
+    events = quiz_events(caplog)
+    failure = next(event for event in events
+                   if event["stage"] == "provider" and event["result"] == "failed")
+    assert failure == {
+        "correlation_id": "deadbeef", "elapsed_ms": failure["elapsed_ms"],
+        "fallback_used": False, "model": "qwen2.5:3b", "provider": "ollama",
+        "provider_error_category": "timeout_or_network",
+        "provider_error_code": "TIMEOUT_OR_NETWORK_ERROR",
+        "result": "failed", "stage": "provider",
+    }
+    assert {(event["stage"], event["result"]) for event in events} >= {
+        ("provider", "started"),
+        ("structural_validation", "not_reached"),
+        ("semantic_validation", "not_reached"),
+    }
+    assert {event["correlation_id"] for event in events} == {"deadbeef"}
+    assert all(event["elapsed_ms"] >= 0 for event in events)
+    assert not any(secret in caplog.text for secret in (
+        "SECRET_PROVIDER_BODY", "SECRET_CONTEXT", "SECRET_TOPIC",
+        "correct_option_id", "grounding_evidence", "explanation"))
+    mock_orchestrator.generate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_semantic_rejection_is_distinct_from_provider_failure(
+    mock_orchestrator, caplog,
+):
+    caplog.set_level(logging.INFO, logger="uvicorn.error")
+    data = json.loads(mock_orchestrator.generate.return_value.content)
+    data["questions"][0]["grounding_evidence"] = "Unsupported private evidence"
+    mock_orchestrator.generate.return_value.content = json.dumps(data)
+
+    with pytest.raises(ValueError, match="^INVALID_QUIZ_SCHEMA: unsupported grounding$"):
+        await QuizService(mock_orchestrator).generate_grounded_quiz(
+            **grounded_input(), correlation_id="feedface")
+
+    events = quiz_events(caplog)
+    assert ("provider", "passed") in {
+        (event["stage"], event["result"]) for event in events}
+    assert ("structural_validation", "passed") in {
+        (event["stage"], event["result"]) for event in events}
+    assert ("semantic_validation", "rejected") in {
+        (event["stage"], event["result"]) for event in events}
+    assert "Unsupported private evidence" not in caplog.text
+    mock_orchestrator.generate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_success_observability_records_safe_stages(mock_orchestrator, caplog):
+    caplog.set_level(logging.INFO, logger="uvicorn.error")
+    await QuizService(mock_orchestrator).generate_grounded_quiz(
+        **grounded_input(), correlation_id="cafebabe")
+    events = quiz_events(caplog)
+    assert {(event["stage"], event["result"]) for event in events} >= {
+        ("provider", "started"), ("provider", "passed"),
+        ("structural_validation", "started"),
+        ("structural_validation", "passed"),
+        ("semantic_validation", "passed"),
+    }
+    assert {event["correlation_id"] for event in events} == {"cafebabe"}
+    assert not any(private in caplog.text for private in (
+        grounded_input()["retrieved_context"], "correct_option_id",
+        "grounding_evidence", "programming language"))
+    mock_orchestrator.generate.assert_awaited_once()
 
 
 @pytest.mark.asyncio
