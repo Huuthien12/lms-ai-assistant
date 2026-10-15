@@ -39,10 +39,12 @@ def http_mocks():
 def output(kind):
     if kind == "quiz":
         return {"questions": [{
-            "question": "What is Python?", "type": "mcq",
-            "options": [{"id": "A", "text": "Programming language"},
+            "question": QuizService.GROUNDING_QUESTION_PREFIX + "Python is a ____.",
+            "type": "mcq",
+            "options": [{"id": "A", "text": "programming language"},
                         {"id": "B", "text": "Database"}],
             "correct_option_id": "A", "explanation": "A language.",
+            "grounding_evidence": "Python is a programming language.",
             "source_metadata": {"source_id": "FABRICATED"},
         }]}
     if kind == "explanation":
@@ -153,7 +155,7 @@ async def test_grading_facts_to_grounded_explanation(selected, response):
         assert "SECRET" not in str(error.value)
     payload = json.loads(orch.generate.call_args.kwargs["prompt"])
     assert payload == {**facts, "trusted_retrieved_context": CONTEXT}
-    assert facts["correct_answer"] == "Programming language"
+    assert facts["correct_answer"] == "programming language"
     assert facts["student_answer"] == (None if selected is None else "Database")
     assert "do not decide correctness or re-grade" in orch.generate.call_args.kwargs["system_prompt"]
     assert graded["results"][0]["correct"] is False
