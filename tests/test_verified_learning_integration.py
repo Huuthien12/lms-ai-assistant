@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from backend.services.ai.grounded_chat import GroundedChatService
 from backend.services.ai.provider_base import LLMResult
+from backend.services.ai.quiz_service import QuizService
 from backend.services.ai.recommendation_service import RecommendationService
 from quiz_lifecycle import QuizRepository
 from learning_evidence import LearningEvidenceRepository
@@ -23,7 +24,10 @@ from verified_learning_fakes import LearningConnection
 
 @pytest.fixture
 def learning(runtime):
-    _,pub,scope,adapter,_,_=runtime; pub.publish(scope,document("trusted full lecture context "*30))
+    _,pub,scope,adapter,_,_=runtime
+    pub.publish(scope,document(
+        "Verified Python lessons cover syntax variables functions classes modules. "
+        + "trusted full lecture context "*30))
     state={"definitions":{},"attempts":{},"answers":{},"cards":{},"reviews":{},"events":[],"mastery":{},"bindings":{}}
     connect=lambda:LearningConnection(state)
     evidence=LearningEvidenceRepository(connect)
@@ -35,8 +39,23 @@ def learning(runtime):
     async def generate(**kwargs):
         system=kwargs["system_prompt"]
         if "MCQ" in system:
-            count=json.loads(kwargs["prompt"])["question_count"]
-            content=json.dumps({"questions":[{"question":f"Python {i}?","type":"mcq","options":[{"id":"A","text":"Language"},{"id":"B","text":"Database"}],"correct_option_id":"A","explanation":"Language."} for i in range(count)]})
+            payload=json.loads(kwargs["prompt"]); count=payload["question_count"]
+            context=" ".join(payload["retrieved_context"].split())
+            tokens=context.split(); excerpt=" ".join(tokens[:min(16,len(tokens))])
+            candidates=[token for token in tokens if excerpt.count(token)==1 and len(token)>1]
+            questions=[]
+            for i in range(count):
+                if i<len(candidates): evidence,answer=excerpt,candidates[i]
+                else:
+                    evidence=tokens[i%len(tokens)]
+                    answer=evidence[1:-1]
+                cloze=evidence.replace(answer,QuizService.GROUNDING_BLANK,1)
+                questions.append({
+                    "question":QuizService.GROUNDING_QUESTION_PREFIX+cloze,"type":"mcq",
+                    "options":[{"id":"A","text":answer},{"id":"B","text":f"distractor {i}"}],
+                    "correct_option_id":"A","explanation":"Copied from verified context.",
+                    "grounding_evidence":evidence})
+            content=json.dumps({"questions":questions})
         elif "flashcards" in system:
             content=json.dumps({"flashcards":[{"front_text":"Python?","back_text":"Language","topic":"model topic","difficulty":"hard"}]})
         elif "already-known grading result" in system:

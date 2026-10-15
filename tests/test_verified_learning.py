@@ -67,7 +67,13 @@ def composition():
     evidence = LearningEvidenceRepository(connect)
     quizzes = QuizRepository(connect, evidence)
     provider = Mock()
-    provider.generate = AsyncMock(return_value=LLMResult("success", "test", "test", json.dumps({"questions": QUESTIONS}), 0))
+    grounded_questions = copy.deepcopy(QUESTIONS)
+    grounded_questions[0].update(
+        question=QuizService.GROUNDING_QUESTION_PREFIX + "One is ____.",
+        grounding_evidence="One is A.",
+    )
+    provider.generate = AsyncMock(return_value=LLMResult(
+        "success", "test", "test", json.dumps({"questions": grounded_questions}), 0))
     generation = LearningGenerationService(QuizService(provider), FlashcardService(provider), quizzes, evidence,
         context_validator=lambda scope, ctx: True)  # Test-only synthetic approval.
     return state, provider, generation, quizzes, evidence, LearningWorkflowRepository(connect, evidence)
@@ -110,6 +116,26 @@ async def test_generate_persist_submit_evidence_mastery_and_review(selected, sco
     with pytest.raises(ValueError, match="already_submitted"):
         quizzes.submit(attempt["attempt_id"], [], GradingService(), scope=SCOPE)
     assert len(state["events"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_mixed_semantic_failure_prevents_quiz_persistence():
+    state, provider, gen, _, _, _ = composition()
+    supported = json.loads(provider.generate.return_value.content)["questions"][0]
+    unsupported = {
+        **copy.deepcopy(supported),
+        "question": QuizService.GROUNDING_QUESTION_PREFIX + "Two is ____.",
+        "options": [{"id": "a", "text": "C"}, {"id": "b", "text": "D"}],
+        "grounding_evidence": "Two is C.",
+    }
+    provider.generate.return_value.content = json.dumps({
+        "questions": [supported, unsupported],
+    })
+    before = copy.deepcopy(state)
+    with pytest.raises(ValueError, match="^INVALID_QUIZ_SCHEMA"):
+        await gen.generate_quiz(
+            SCOPE, context(), topic="topic", question_count=2, difficulty="easy")
+    assert state == before
 
 
 @pytest.mark.asyncio

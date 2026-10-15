@@ -7,6 +7,11 @@ from backend.services.ai.provider_base import LLMResult
 
 
 class QuizService:
+    GROUNDING_QUESTION_PREFIX = (
+        "Complete the missing text in this exact excerpt from the verified source: "
+    )
+    GROUNDING_BLANK = "____"
+
     def __init__(self, orchestrator: AIOrchestrator):
         if not orchestrator:
             raise ValueError("QuizService yêu cầu AIOrchestrator.")
@@ -24,9 +29,43 @@ class QuizService:
         raise ValueError("INVALID_QUIZ_REQUEST: invalid source_metadata")
 
     @staticmethod
+    def _normalize_grounding_text(value: str) -> str:
+        return " ".join(value.split())
+
+    @classmethod
+    def _validated_grounding(
+        cls, question: Dict[str, Any], question_text: str,
+        options: List[Dict[str, str]], correct_id: str, context: str,
+    ) -> tuple[str, str]:
+        evidence = question.get("grounding_evidence")
+        if not isinstance(evidence, str) or not evidence.strip() or len(evidence) > 8000:
+            raise ValueError("INVALID_QUIZ_SCHEMA: unsupported grounding")
+        normalized_context = cls._normalize_grounding_text(context)
+        normalized_evidence = cls._normalize_grounding_text(evidence)
+        if normalized_evidence not in normalized_context:
+            raise ValueError("INVALID_QUIZ_SCHEMA: unsupported grounding")
+        correct_text = next(option["text"] for option in options if option["id"] == correct_id)
+        normalized_answer = cls._normalize_grounding_text(correct_text)
+        answer_start = normalized_evidence.find(normalized_answer)
+        if (answer_start < 0
+                or normalized_evidence.find(normalized_answer, answer_start + 1) >= 0):
+            raise ValueError("INVALID_QUIZ_SCHEMA: unsupported grounding")
+        before = normalized_evidence[:answer_start]
+        after = normalized_evidence[answer_start + len(normalized_answer):]
+        if not before.strip() and not after.strip():
+            raise ValueError("INVALID_QUIZ_SCHEMA: unsupported grounding")
+        expected_question = (
+            cls.GROUNDING_QUESTION_PREFIX + before + cls.GROUNDING_BLANK + after
+        )
+        if (len(expected_question) > 8000
+                or cls._normalize_grounding_text(question_text) != expected_question):
+            raise ValueError("INVALID_QUIZ_SCHEMA: unsupported grounding")
+        return expected_question, normalized_evidence
+
+    @staticmethod
     def validate_and_parse_quiz(
         raw_content: Any, question_count: Optional[int] = None,
-        source_metadata: Any = None,
+        source_metadata: Any = None, grounding_context: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Parse and validate internal MCQs; only caller sources are retained."""
         source_metadata = QuizService._copy_sources(source_metadata)
@@ -99,10 +138,17 @@ class QuizService:
                 raise ValueError("INVALID_QUIZ_SCHEMA: duplicate option ids")
             if correct_id.strip() not in option_ids:
                 raise ValueError("INVALID_QUIZ_SCHEMA: answer key not in options")
+            grounding = None
+            if grounding_context is not None:
+                grounding = QuizService._validated_grounding(
+                    question, text, normalized_options, correct_id.strip(), grounding_context)
             validated = {
-                "question": text.strip(), "type": "mcq", "options": normalized_options,
+                "question": grounding[0] if grounding else text.strip(),
+                "type": "mcq", "options": normalized_options,
                 "correct_option_id": correct_id.strip(), "explanation": explanation.strip(),
             }
+            if grounding:
+                validated["grounding_evidence"] = grounding[1]
             if "question_id" in question:
                 question_id = question["question_id"]
                 if (not isinstance(question_id, str) or not question_id.strip()
@@ -158,6 +204,11 @@ class QuizService:
             "with a 'questions' list. Each question must contain question, type ('mcq'), "
             "options (at least two objects with unique id and non-empty text), "
             "correct_option_id matching an existing option, and non-empty explanation. "
+            "Every question must be an extractive cloze. Set grounding_evidence to an exact "
+            "contiguous excerpt copied from retrieved_context. The correct option text must "
+            "occur exactly once inside grounding_evidence. Set question exactly to "
+            f"'{self.GROUNDING_QUESTION_PREFIX}' followed by that excerpt with the correct "
+            f"option text replaced by '{self.GROUNDING_BLANK}'. "
             "Do not invent citations or source metadata; do not output source_metadata."
         )
         prompt = json.dumps({
@@ -173,7 +224,8 @@ class QuizService:
             raise ValueError("QUIZ_GENERATION_FAILED") from None
         if not isinstance(result, LLMResult) or result.status != "success":
             raise ValueError("QUIZ_GENERATION_FAILED")
-        internal = self.validate_and_parse_quiz(result.content, question_count, source_metadata)
+        internal = self.validate_and_parse_quiz(
+            result.content, question_count, source_metadata, retrieved_context)
         return self.to_public_result(internal) if client_facing else internal
 
     async def generate_quiz(

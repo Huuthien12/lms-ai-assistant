@@ -12,14 +12,15 @@ def mock_orchestrator():
     valid_quiz_json = json.dumps({
         "questions": [
             {
-                "question": "Python là gì?",
+                "question": QuizService.GROUNDING_QUESTION_PREFIX + "Python is a ____.",
                 "type": "mcq",
                 "options": [
-                    {"id": "A", "text": "Ngôn ngữ lập trình"},
-                    {"id": "B", "text": "Loài rắn"}
+                    {"id": "A", "text": "programming language"},
+                    {"id": "B", "text": "database"}
                 ],
                 "correct_option_id": "A",
-                "explanation": "Python là ngôn ngữ lập trình bậc cao."
+                "explanation": "The answer is copied from the verified excerpt.",
+                "grounding_evidence": "Python is a programming language."
             }
         ]
     })
@@ -251,12 +252,23 @@ async def test_exact_count_and_prompt_contract(mock_orchestrator):
     call = mock_orchestrator.generate.call_args.kwargs
     assert json.loads(call["prompt"])["retrieved_context"] == grounded_input()["retrieved_context"]
     for instruction in ("exactly 2", "outside knowledge", "valid JSON only", "MCQ only",
-                        "correct_option_id", "explanation", "Do not invent citations"):
+                        "correct_option_id", "grounding_evidence", "extractive cloze",
+                        QuizService.GROUNDING_QUESTION_PREFIX, "Do not invent citations"):
         assert instruction in call["system_prompt"]
-    question = json.loads(mock_orchestrator.generate.return_value.content)["questions"][0]
+    evidence = [f"Verified fact {index} contains answer {index}." for index in range(20)]
     mock_orchestrator.generate.return_value.content = json.dumps({"questions": [
-        {**question, "question": f"Distinct question {index}"} for index in range(20)]})
-    result = await service.generate_grounded_quiz(**grounded_input(question_count=20))
+        {
+            "question": QuizService.GROUNDING_QUESTION_PREFIX
+                        + f"Verified fact {index} contains ____.",
+            "type": "mcq",
+            "options": [{"id": "A", "text": f"answer {index}"},
+                        {"id": "B", "text": f"distractor {index}"}],
+            "correct_option_id": "A",
+            "explanation": "Copied from the verified excerpt.",
+            "grounding_evidence": evidence[index],
+        } for index in range(20)]})
+    result = await service.generate_grounded_quiz(**grounded_input(
+        question_count=20, retrieved_context=" ".join(evidence)))
     assert len(result["questions"]) == 20
 
 
