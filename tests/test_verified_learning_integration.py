@@ -87,6 +87,98 @@ def test_chat_quiz_grade_evidence_progress_and_explanation_vertical_flow(learnin
     orch.generate.assert_not_awaited()
 
 
+def test_p6_five_question_cardinality_score_and_mastery_match_historical_shape(learning):
+    client,_,state,orch,_,_=learning
+    request={**generation(),"count":5}
+    public=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=request).json()
+    encoded=json.dumps(public)
+    assert len(public["questions"])==5
+    assert all(field not in encoded for field in ("correct_option_id","correct_answer","answer_key","explanation"))
+    attempt=client.post(f"/learning/quizzes/{public['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    answers=[{"question_id":question["question_id"],"selected_option_id":"A" if index<2 else "B"}
+             for index,question in enumerate(public["questions"])]
+    orch.generate.reset_mock()
+    result=client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":answers})
+    assert result.status_code==200
+    assert result.json()["score_percent"]==40 and result.json()["correct_count"]==2
+    assert len(state["attempts"])==1
+    persisted=[(question,selection,correct) for (stored_attempt,question),(selection,correct) in state["answers"].items()
+               if stored_attempt==attempt]
+    assert len(persisted)==5 and len({question for question,_,_ in persisted})==5
+    assert sum(correct for _,_,correct in persisted)==2
+    assert len(state["events"])==5
+    evidence_scopes={(event["student_id"],event["course_id"]) for event in state["events"]}
+    assert len(evidence_scopes)==1 and next(iter(evidence_scopes))[1]=="INT1339"
+    mastery=client.get("/learning/courses/INT1339/progress",headers=headers()).json()["topics"][0]
+    assert (mastery["mastery_score"],mastery["level"],mastery["confidence"],mastery["evidence_count"])==(40,"WEAK","MEDIUM",5)
+    orch.generate.assert_not_awaited()
+    before=deepcopy(state)
+    retry=client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":answers})
+    assert retry.status_code==409 and retry.json()["detail"]["code"]=="already_submitted"
+    assert state==before
+
+
+def test_missing_answer_is_persisted_as_unanswered_and_unknown_extra_is_atomic(learning):
+    client,_,state,orch,_,_=learning
+    public=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json={**generation(),"count":2}).json()
+    attempt=client.post(f"/learning/quizzes/{public['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    first=public["questions"][0]["question_id"]
+    before=deepcopy(state); orch.generate.reset_mock()
+    rejected=client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[
+        {"question_id":first,"selected_option_id":"A"},{"question_id":"foreign","selected_option_id":"A"}]})
+    assert rejected.status_code==422 and state==before
+    result=client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[
+        {"question_id":first,"selected_option_id":"A"}]}).json()
+    assert result["total_questions"]==2 and result["correct_count"]==1 and result["score_percent"]==50
+    assert len(result["results"])==2 and sum(item["selected_option_id"] is None for item in result["results"])==1
+    orch.generate.assert_not_awaited()
+
+
+@pytest.mark.parametrize("forged",[
+    {"correct_answer":"A"},{"correct":True},{"score":100},{"explanation":"trust me"},
+])
+def test_submit_rejects_all_client_owned_grading_fields(learning,forged):
+    client,_,state,orch,_,_=learning
+    public=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).json()
+    attempt=client.post(f"/learning/quizzes/{public['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    answer={"question_id":public["questions"][0]["question_id"],"selected_option_id":"A",**forged}
+    before=deepcopy(state); orch.generate.reset_mock()
+    response=client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[answer]})
+    assert response.status_code==422 and state==before
+    orch.generate.assert_not_awaited()
+
+
+def test_review_before_submit_and_inactive_source_have_controlled_semantics(learning):
+    client,store,state,orch,pub,_=learning
+    public=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).json()
+    attempt=client.post(f"/learning/quizzes/{public['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    assert client.get(f"/learning/attempts/{attempt}/review",headers=headers()).status_code==409
+    saved=restore_context(store.get("quiz",public["quiz_id"])["payload"]["context"])
+    pub.delete(saved.scope,"1")
+    orch.generate.reset_mock()
+    submitted=client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[{
+        "question_id":public["questions"][0]["question_id"],"selected_option_id":"B"}]})
+    assert submitted.status_code==200 and submitted.json()["score_percent"]==0
+    assert len(state["events"])==1
+    review=client.get(f"/learning/attempts/{attempt}/review",headers=headers()).json()
+    assert review["results"][0]["explanation_status"]=="unavailable"
+    orch.generate.assert_not_awaited()
+
+
+def test_malformed_persisted_binding_is_sanitized_and_never_reaches_grading(learning):
+    client,_,state,orch,_,_=learning
+    public=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).json()
+    owner,course,_=state["bindings"][("quiz",public["quiz_id"])]
+    state["bindings"][("quiz",public["quiz_id"])]=(owner,course,"PRIVATE_KEY_MATERIAL")
+    orch.generate.reset_mock()
+    response=client.get("/learning/quizzes/"+public["quiz_id"],headers=headers())
+    assert response.status_code==503
+    assert response.json()["detail"]["code"]=="learning_dependency_unavailable"
+    assert "PRIVATE_KEY_MATERIAL" not in response.text
+    assert not state["attempts"] and not state["answers"] and not state["events"]
+    orch.generate.assert_not_awaited()
+
+
 def test_flashcard_content_persists_and_review_evidence_is_idempotent(learning):
     client,store,state,orch,_,_=learning
     created=client.post("/learning/courses/INT1339/flashcards",headers=headers(),json=generation()).json()
@@ -134,21 +226,23 @@ def test_client_identity_key_score_and_context_claims_are_rejected(learning):
     assert not state["definitions"]
 
 
-def test_malformed_provider_output_creates_no_trusted_artifact(learning):
+@pytest.mark.parametrize("path",["quizzes","flashcards"])
+def test_malformed_provider_output_creates_no_trusted_artifact(learning,path):
     client,_,state,orch,_,_=learning
     orch.generate.side_effect=None; orch.generate.return_value=LLMResult("success","fake","fake","INVALID JSON",0)
-    assert client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).status_code==502
-    assert not state["definitions"] and not state["bindings"]
+    assert client.post("/learning/courses/INT1339/"+path,headers=headers(),json=generation()).status_code==502
+    assert not state["definitions"] and not state["cards"] and not state["bindings"]
 
 
-def test_provider_timeout_returns_502_without_persistence(learning):
+@pytest.mark.parametrize("path,code",[("quizzes","QUIZ_GENERATION_FAILED"),("flashcards","FLASHCARD_GENERATION_FAILED")])
+def test_provider_timeout_returns_502_without_persistence(learning,path,code):
     client,_,state,orch,_,_=learning
     before=deepcopy(state); orch.generate.side_effect=None
     orch.generate.return_value=LLMResult(
         "error","ollama","qwen2.5:3b","",30000,error_code="TIMEOUT_OR_NETWORK_ERROR")
-    response=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation())
+    response=client.post("/learning/courses/INT1339/"+path,headers=headers(),json=generation())
     assert response.status_code==502
-    assert response.json()["detail"]["code"]=="QUIZ_GENERATION_FAILED"
+    assert response.json()["detail"]["code"]==code
     assert state==before
 
 
