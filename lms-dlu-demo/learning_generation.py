@@ -5,8 +5,10 @@ the shared guard and verified retrieval have succeeded. No arbitrary KB search
 or provider payload is exposed to the integration caller.
 """
 import uuid
+import time
 
 from backend.services.ai.learning_context import LearningScope, VerifiedLearningContext
+from backend.services.ai.quiz_service import record_quiz_stage
 from backend.services.ai.quiz_service import QuizService
 from quiz_lifecycle import QuizDefinitionRequest
 from learning_evidence import FlashcardRegistration
@@ -36,21 +38,39 @@ class LearningGenerationService:
             raise ValueError("learning_context_rejected")
 
     async def generate_quiz(self, scope: LearningScope, context: VerifiedLearningContext,
-                            *, topic: str, question_count: int, difficulty: str):
+                            *, topic: str, question_count: int, difficulty: str,
+                            correlation_id: str | None = None):
         self._context(scope, context)
-        internal = await self.quiz_service.generate_grounded_quiz(
-            topic=topic, question_count=question_count, difficulty=difficulty,
-            question_types=["mcq"], retrieved_context=context.text,
-            source_metadata=context.source_metadata(), client_facing=False,
-        )
+        correlation_id = correlation_id or uuid.uuid4().hex
+        try:
+            internal = await self.quiz_service.generate_grounded_quiz(
+                topic=topic, question_count=question_count, difficulty=difficulty,
+                question_types=["mcq"], retrieved_context=context.text,
+                source_metadata=context.source_metadata(), client_facing=False,
+                correlation_id=correlation_id,
+            )
+        except Exception:
+            record_quiz_stage(correlation_id, "persistence", "not_reached", 0)
+            raise
         for question in internal["questions"]:
             question["question_id"] = str(uuid.uuid4())
         quiz_id = str(uuid.uuid4())
         self._context(scope, context)
-        self.quizzes.save_quiz(QuizDefinitionRequest(
-            quiz_id=quiz_id, course_id=scope.course_id, topic=topic,
-            difficulty=difficulty, questions=internal["questions"], learning_context=context,
-        ))
+        persistence_started = time.monotonic()
+        record_quiz_stage(correlation_id, "persistence", "started", 0)
+        try:
+            self.quizzes.save_quiz(QuizDefinitionRequest(
+                quiz_id=quiz_id, course_id=scope.course_id, topic=topic,
+                difficulty=difficulty, questions=internal["questions"], learning_context=context,
+            ))
+        except Exception:
+            record_quiz_stage(
+                correlation_id, "persistence", "failed",
+                (time.monotonic() - persistence_started) * 1000)
+            raise
+        record_quiz_stage(
+            correlation_id, "persistence", "passed",
+            (time.monotonic() - persistence_started) * 1000)
         return {"quiz_id": quiz_id, "course_id": scope.course_id,
                 **QuizService.to_public_result(internal)}
 

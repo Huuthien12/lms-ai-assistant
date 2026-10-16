@@ -1,4 +1,5 @@
 import sys
+import logging
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).parents[1]/"lms-dlu-demo"))
 from copy import deepcopy
@@ -9,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from backend.services.ai.grounded_chat import GroundedChatService
 from backend.services.ai.provider_base import LLMResult
+from backend.services.ai.quiz_service import QuizService
 from backend.services.ai.recommendation_service import RecommendationService
 from quiz_lifecycle import QuizRepository
 from learning_evidence import LearningEvidenceRepository
@@ -21,9 +23,18 @@ from test_verified_chat_integration import runtime, document
 from verified_learning_fakes import LearningConnection
 
 
+def quiz_events(caplog):
+    prefix="quiz_observability "
+    return [json.loads(record.getMessage()[len(prefix):]) for record in caplog.records
+            if record.getMessage().startswith(prefix)]
+
+
 @pytest.fixture
 def learning(runtime):
-    _,pub,scope,adapter,_,_=runtime; pub.publish(scope,document("trusted full lecture context "*30))
+    _,pub,scope,adapter,_,_=runtime
+    pub.publish(scope,document(
+        "Verified Python lessons cover syntax variables functions classes modules. "
+        + "trusted full lecture context "*30))
     state={"definitions":{},"attempts":{},"answers":{},"cards":{},"reviews":{},"events":[],"mastery":{},"bindings":{}}
     connect=lambda:LearningConnection(state)
     evidence=LearningEvidenceRepository(connect)
@@ -35,8 +46,23 @@ def learning(runtime):
     async def generate(**kwargs):
         system=kwargs["system_prompt"]
         if "MCQ" in system:
-            count=json.loads(kwargs["prompt"])["question_count"]
-            content=json.dumps({"questions":[{"question":f"Python {i}?","type":"mcq","options":[{"id":"A","text":"Language"},{"id":"B","text":"Database"}],"correct_option_id":"A","explanation":"Language."} for i in range(count)]})
+            payload=json.loads(kwargs["prompt"]); count=payload["question_count"]
+            context=" ".join(payload["retrieved_context"].split())
+            tokens=context.split(); excerpt=" ".join(tokens[:min(16,len(tokens))])
+            candidates=[token for token in tokens if excerpt.count(token)==1 and len(token)>1]
+            questions=[]
+            for i in range(count):
+                if i<len(candidates): evidence,answer=excerpt,candidates[i]
+                else:
+                    evidence=tokens[i%len(tokens)]
+                    answer=evidence[1:-1]
+                cloze=evidence.replace(answer,QuizService.GROUNDING_BLANK,1)
+                questions.append({
+                    "question":QuizService.GROUNDING_QUESTION_PREFIX+cloze,"type":"mcq",
+                    "options":[{"id":"A","text":answer},{"id":"B","text":f"distractor {i}"}],
+                    "correct_option_id":"A","explanation":"Copied from verified context.",
+                    "grounding_evidence":evidence})
+            content=json.dumps({"questions":questions})
         elif "flashcards" in system:
             content=json.dumps({"flashcards":[{"front_text":"Python?","back_text":"Language","topic":"model topic","difficulty":"hard"}]})
         elif "already-known grading result" in system:
@@ -141,15 +167,84 @@ def test_malformed_provider_output_creates_no_trusted_artifact(learning):
     assert not state["definitions"] and not state["bindings"]
 
 
-def test_provider_timeout_returns_502_without_persistence(learning):
+def test_provider_timeout_returns_502_without_persistence(learning,caplog):
     client,_,state,orch,_,_=learning
+    caplog.set_level(logging.INFO,logger="uvicorn.error")
     before=deepcopy(state); orch.generate.side_effect=None
     orch.generate.return_value=LLMResult(
-        "error","ollama","qwen2.5:3b","",30000,error_code="TIMEOUT_OR_NETWORK_ERROR")
+        "error","ollama","qwen2.5:3b","SECRET_PROVIDER_BODY",30000,
+        error_code="TIMEOUT_OR_NETWORK_ERROR")
     response=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation())
     assert response.status_code==502
-    assert response.json()["detail"]["code"]=="QUIZ_GENERATION_FAILED"
+    assert response.json()["detail"]=={
+        "code":"QUIZ_GENERATION_FAILED",
+        "message":"Learning request could not be completed."}
     assert state==before
+    events=quiz_events(caplog)
+    assert {(event["stage"],event["result"]) for event in events}>={
+        ("authorization_pre_generation","passed"),("retrieval_context","passed"),
+        ("provider","started"),("provider","failed"),
+        ("structural_validation","not_reached"),
+        ("semantic_validation","not_reached"),("persistence","not_reached")}
+    assert len({event["correlation_id"] for event in events})==1
+    assert not any(stage.startswith("artifact_persistence") for stage in
+                   (event["stage"] for event in events))
+    assert "SECRET_PROVIDER_BODY" not in caplog.text
+    assert "trusted full lecture context" not in caplog.text
+    assert all(event["elapsed_ms"]>=0 for event in events)
+    orch.generate.assert_awaited_once()
+
+
+def test_success_observability_reaches_persistence_without_private_content(learning,caplog):
+    client,_,state,orch,_,_=learning
+    caplog.set_level(logging.INFO,logger="uvicorn.error")
+    response=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation())
+    assert response.status_code==200 and len(state["definitions"])==1
+    events=quiz_events(caplog)
+    assert [(event["stage"],event["result"]) for event in events]==[
+        ("authorization_pre_generation","passed"),("retrieval_context","passed"),
+        ("provider","started"),("provider","passed"),
+        ("structural_validation","started"),("structural_validation","passed"),
+        ("semantic_validation","passed"),("persistence","started"),
+        ("persistence","passed"),("artifact_persistence","started"),
+        ("artifact_persistence","passed")]
+    assert len({event["correlation_id"] for event in events})==1
+    assert "trusted full lecture context" not in caplog.text
+    assert "correct_option_id" not in caplog.text
+    orch.generate.assert_awaited_once()
+
+
+def test_quiz_persistence_failure_is_sanitized_and_observable(learning,caplog):
+    client,store,state,orch,_,_=learning
+    caplog.set_level(logging.INFO,logger="uvicorn.error")
+    store.quizzes.save_quiz=MagicMock(side_effect=ValueError("persistence_failure"))
+    response=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation())
+    assert response.status_code==503
+    assert response.json()["detail"]=={
+        "code":"persistence_failure","message":"Learning request could not be completed."}
+    assert [(event["stage"],event["result"]) for event in quiz_events(caplog)][-2:]==[
+        ("persistence","started"),("persistence","failed")]
+    assert not state["definitions"] and not state["bindings"]
+    assert "trusted full lecture context" not in caplog.text
+    assert "correct_option_id" not in caplog.text
+    orch.generate.assert_awaited_once()
+
+
+def test_artifact_persistence_failure_is_sanitized_and_observable(learning,caplog):
+    client,store,state,orch,_,_=learning
+    caplog.set_level(logging.INFO,logger="uvicorn.error")
+    store.put=MagicMock(side_effect=ValueError("persistence_failure"))
+    response=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation())
+    assert response.status_code==503
+    assert response.json()["detail"]=={
+        "code":"persistence_failure","message":"Learning request could not be completed."}
+    events=[(event["stage"],event["result"]) for event in quiz_events(caplog)]
+    assert events[-4:]==[("persistence","started"),("persistence","passed"),
+                        ("artifact_persistence","started"),("artifact_persistence","failed")]
+    assert len(state["definitions"])==1 and not state["bindings"]
+    assert "trusted full lecture context" not in caplog.text
+    assert "correct_option_id" not in caplog.text
+    orch.generate.assert_awaited_once()
 
 
 @pytest.mark.parametrize("path",["quizzes","flashcards"])
