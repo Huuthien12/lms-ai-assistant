@@ -53,9 +53,11 @@ def output(kind):
                 "correct_answer": "FAKE"}
     if kind == "flashcard":
         return {"flashcards": [{
-            "front_text": "What is Python?", "back_text": "Programming language",
+            "front_text": FlashcardService.GROUNDING_FRONT_PREFIX + "Python is a ____.",
+            "back_text": "programming language",
             "topic": "Python", "difficulty": "easy", "rating": "EASY",
             "correct": True, "evidence_count": 999,
+            "grounding_evidence": "Python is a programming language.",
             "source_metadata": {"source_id": "FABRICATED"},
         }]}
     return {"message": "Review the topic and try the recommended quiz."}

@@ -142,18 +142,45 @@ async def test_mixed_semantic_failure_prevents_quiz_persistence():
 async def test_flashcard_generation_persists_content_and_review_evidence():
     state, provider, gen, _, evidence, _ = composition()
     provider.generate.return_value.content = json.dumps({"flashcards": [{
-        "front": "One?", "back": "A", "topic": "topic", "difficulty": "easy",
+        "front": FlashcardService.GROUNDING_FRONT_PREFIX + "One is ____.",
+        "back": "A", "topic": "topic", "difficulty": "easy",
+        "grounding_evidence": "One is A.",
         "source_metadata": {"source_id": "forged"}}]})
     result = await gen.generate_flashcards(SCOPE, context(), topic="topic", count=1, difficulty="easy")
     card_id = result["flashcards"][0]["flashcard_id"]
     fresh = LearningEvidenceRepository(evidence.connect)
     card = fresh.flashcard(card_id, SCOPE)
-    assert card["front_text"] == "One?" and card["back_text"] == "A"
+    assert card["front_text"] == FlashcardService.GROUNDING_FRONT_PREFIX + "One is ____."
+    assert card["back_text"] == "A"
     assert card["learning_context"]["sources"][0]["version"] == "v1"
     assert "forged" not in json.dumps(card)
     reviewed = fresh.review(card_id, FlashcardReviewRequest(student_id=SCOPE.owner_id, rating="GOOD", review_id="review"), scope=SCOPE)
     assert reviewed["mastery"]["mastery_score"] == 75
     assert len(state["events"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_flashcard_semantic_failure_prevents_batch_persistence():
+    state, provider, gen, _, _, _ = composition()
+    provider.generate.return_value.content = json.dumps({"flashcards": [
+        {
+            "front_text": FlashcardService.GROUNDING_FRONT_PREFIX + "One is ____.",
+            "back_text": "A", "topic": "topic", "difficulty": "easy",
+            "grounding_evidence": "One is A.",
+        },
+        {
+            "front_text": FlashcardService.GROUNDING_FRONT_PREFIX + "Two is ____.",
+            "back_text": "B", "topic": "topic", "difficulty": "easy",
+            "grounding_evidence": "Two is B.",
+        },
+    ]})
+    before = copy.deepcopy(state)
+
+    with pytest.raises(ValueError, match="^INVALID_FLASHCARD_SCHEMA$"):
+        await gen.generate_flashcards(
+            SCOPE, context(), topic="topic", count=2, difficulty="easy")
+
+    assert state == before
 
 
 @pytest.mark.parametrize("scope", [LearningScope(owner_id="attacker", course_id="course-1"),

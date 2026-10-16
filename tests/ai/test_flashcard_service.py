@@ -14,10 +14,11 @@ def mock_orchestrator():
     valid_json = json.dumps({
         "flashcards": [
             {
-                "front_text": "Python là gì?",
-                "back_text": "Ngôn ngữ lập trình bậc cao",
+                "front_text": FlashcardService.GROUNDING_FRONT_PREFIX + "Python is a ____.",
+                "back_text": "programming language",
                 "topic": "Programming",
-                "difficulty": "easy"
+                "difficulty": "easy",
+                "grounding_evidence": "Python is a programming language.",
             }
         ]
     })
@@ -32,8 +33,8 @@ async def test_valid_flashcards(mock_orchestrator):
     result = await service.generate_flashcards("Tạo flashcard")
     assert "flashcards" in result
     card = result["flashcards"][0]
-    assert card["front_text"] == "Python là gì?"
-    assert card["back_text"] == "Ngôn ngữ lập trình bậc cao"
+    assert card["front_text"] == FlashcardService.GROUNDING_FRONT_PREFIX + "Python is a ____."
+    assert card["back_text"] == "programming language"
     assert card["topic"] == "Programming"
 
 @pytest.mark.asyncio
@@ -116,8 +117,11 @@ def grounded_input(**overrides):
 async def test_grounded_generation_prompt_and_exact_count(mock_orchestrator):
     service = FlashcardService(mock_orchestrator)
     result = await service.generate_grounded_flashcards(**grounded_input(), temperature=0)
-    assert result == {"flashcards": [{"front_text": "Python là gì?",
-        "back_text": "Ngôn ngữ lập trình bậc cao", "topic": "Programming", "difficulty": "easy"}]}
+    assert result == {"flashcards": [{
+        "front_text": FlashcardService.GROUNDING_FRONT_PREFIX + "Python is a ____.",
+        "back_text": "programming language", "topic": "Programming",
+        "difficulty": "easy", "grounding_evidence": "Python is a programming language.",
+    }]}
     call = mock_orchestrator.generate.call_args.kwargs
     assert json.loads(call["prompt"]) == {
         "topic": "Programming", "count": 1, "difficulty": "easy",
@@ -147,9 +151,10 @@ async def test_count_mismatch_and_upper_bound(mock_orchestrator):
     with pytest.raises(ValueError, match="^INVALID_FLASHCARD_SCHEMA$"):
         await service.generate_grounded_flashcards(**grounded_input(count=2))
     card = json.loads(mock_orchestrator.generate.return_value.content)["flashcards"][0]
-    mock_orchestrator.generate.return_value.content = json.dumps({"flashcards": [
-        {**card, "front_text": f"Distinct front {index}"} for index in range(50)]})
-    assert len((await service.generate_grounded_flashcards(**grounded_input(count=50)))["flashcards"]) == 50
+    raw = {"flashcards": [
+        {**card, "front_text": f"Distinct front {index}", "back_text": f"Distinct back {index}"}
+        for index in range(50)]}
+    assert len(service.validate_and_parse_flashcards(raw, count=50)["flashcards"]) == 50
 
 
 @pytest.mark.asyncio
@@ -214,9 +219,10 @@ async def test_invalid_output_safe(mock_orchestrator, content):
 async def test_front_back_aliases(mock_orchestrator):
     mock_orchestrator.generate.return_value.content = json.dumps({"flashcards": [
         {"front": " Front ", "back": " Back ", "topic": " Topic ", "difficulty": "mixed"}]})
-    result = await FlashcardService(mock_orchestrator).generate_grounded_flashcards(**grounded_input())
+    result = await FlashcardService(mock_orchestrator).generate_flashcards(
+        "Cards", topic="Programming", count=1, difficulty="easy")
     assert result == {"flashcards": [{"front_text": "Front", "back_text": "Back",
-                                      "topic": "Programming", "difficulty": "easy"}]}
+                                      "topic": "Topic", "difficulty": "mixed"}]}
 
 
 @pytest.mark.asyncio
@@ -298,7 +304,8 @@ async def test_duplicate_card_pairs_rejected(mock_orchestrator, front, back):
         {**card, "front_text": "Front", "back_text": "Back"},
         {**card, "front_text": front, "back_text": back}]})
     with pytest.raises(ValueError, match="^INVALID_FLASHCARD_SCHEMA$"):
-        await FlashcardService(mock_orchestrator).generate_grounded_flashcards(**grounded_input(count=2))
+        await FlashcardService(mock_orchestrator).generate_flashcards(
+            "Cards", topic="Programming", count=2, difficulty="easy")
     mock_orchestrator.generate.assert_awaited_once()
 
 
@@ -309,7 +316,8 @@ async def test_shared_front_or_back_with_distinct_pair_accepted(mock_orchestrato
     mock_orchestrator.generate.return_value.content = json.dumps({"flashcards": [
         {**card, "front_text": "Front", "back_text": "Back"},
         {**card, "front_text": front, "back_text": back}]})
-    result = await FlashcardService(mock_orchestrator).generate_grounded_flashcards(**grounded_input(count=2))
+    result = await FlashcardService(mock_orchestrator).generate_flashcards(
+        "Cards", topic="Programming", count=2, difficulty="easy")
     assert len(result["flashcards"]) == 2
 
 

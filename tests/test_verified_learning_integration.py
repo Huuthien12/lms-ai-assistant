@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from backend.services.ai.grounded_chat import GroundedChatService
 from backend.services.ai.provider_base import LLMResult
+from backend.services.ai.flashcard_service import FlashcardService
 from backend.services.ai.quiz_service import QuizService
 from backend.services.ai.recommendation_service import RecommendationService
 from quiz_lifecycle import QuizRepository
@@ -64,7 +65,20 @@ def learning(runtime):
                     "grounding_evidence":evidence})
             content=json.dumps({"questions":questions})
         elif "flashcards" in system:
-            content=json.dumps({"flashcards":[{"front_text":"Python?","back_text":"Language","topic":"model topic","difficulty":"hard"}]})
+            payload=json.loads(kwargs["prompt"])
+            context=" ".join(payload["trusted_retrieved_context"].split())
+            if "Python" in context:
+                evidence="Verified Python lessons cover syntax variables functions classes modules."
+                answer="Python"
+            else:
+                evidence=context.split()[0]
+                answer=evidence[1:-1]
+            content=json.dumps({"flashcards":[{
+                "front_text":FlashcardService.GROUNDING_FRONT_PREFIX +
+                    evidence.replace(answer,FlashcardService.GROUNDING_BLANK,1),
+                "back_text":answer,"topic":"model topic","difficulty":"hard",
+                "grounding_evidence":evidence,
+            }]})
         elif "already-known grading result" in system:
             content=json.dumps({"explanation":"Python is a language.","key_concept":"Programming"})
         else: content="Grounded answer"
@@ -117,7 +131,11 @@ def test_flashcard_content_persists_and_review_evidence_is_idempotent(learning):
     client,store,state,orch,_,_=learning
     created=client.post("/learning/courses/INT1339/flashcards",headers=headers(),json=generation()).json()
     card=created["flashcards"][0]
-    assert card["front_text"]=="Python?" and card["back_text"]=="Language" and card["topic"]=="Python"
+    assert "grounding_evidence" not in json.dumps(created)
+    assert "source_metadata" not in json.dumps(created)
+    assert card["front_text"]==(FlashcardService.GROUNDING_FRONT_PREFIX +
+        "Verified ____ lessons cover syntax variables functions classes modules.")
+    assert card["back_text"]=="Python" and card["topic"]=="Python"
     reloaded=client.get("/learning/courses/INT1339/flashcards",headers=headers()).json()["flashcards"]
     assert reloaded==[card]
     path=f"/learning/flashcards/{card['flashcard_id']}/reviews"
