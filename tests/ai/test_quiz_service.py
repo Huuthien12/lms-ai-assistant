@@ -395,7 +395,7 @@ async def test_semantic_rejection_is_distinct_from_provider_failure(
     events = quiz_events(caplog)
     assert ("provider", "passed") in {
         (event["stage"], event["result"]) for event in events}
-    assert ("structural_validation", "passed") in {
+    assert ("structural_validation", "partial") in {
         (event["stage"], event["result"]) for event in events}
     assert ("semantic_validation", "rejected") in {
         (event["stage"], event["result"]) for event in events}

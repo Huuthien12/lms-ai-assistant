@@ -334,7 +334,7 @@ class QuizService:
         except _QuizSemanticValidationError:
             total_ms = (time.monotonic() - validation_started) * 1000
             record_quiz_stage(
-                correlation_id, "structural_validation", "passed",
+                correlation_id, "structural_validation", "partial",
                 max(0.0, total_ms - validation["semantic_elapsed_ms"]),
             )
             record_quiz_stage(

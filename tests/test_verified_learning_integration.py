@@ -201,12 +201,47 @@ def test_success_observability_reaches_persistence_without_private_content(learn
     response=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation())
     assert response.status_code==200 and len(state["definitions"])==1
     events=quiz_events(caplog)
-    assert {(event["stage"],event["result"]) for event in events}>={
+    assert [(event["stage"],event["result"]) for event in events]==[
         ("authorization_pre_generation","passed"),("retrieval_context","passed"),
-        ("provider","passed"),("structural_validation","passed"),
-        ("semantic_validation","passed"),("persistence","passed"),
-        ("artifact_persistence","passed")}
+        ("provider","started"),("provider","passed"),
+        ("structural_validation","started"),("structural_validation","passed"),
+        ("semantic_validation","passed"),("persistence","started"),
+        ("persistence","passed"),("artifact_persistence","started"),
+        ("artifact_persistence","passed")]
     assert len({event["correlation_id"] for event in events})==1
+    assert "trusted full lecture context" not in caplog.text
+    assert "correct_option_id" not in caplog.text
+    orch.generate.assert_awaited_once()
+
+
+def test_quiz_persistence_failure_is_sanitized_and_observable(learning,caplog):
+    client,store,state,orch,_,_=learning
+    caplog.set_level(logging.INFO,logger="uvicorn.error")
+    store.quizzes.save_quiz=MagicMock(side_effect=ValueError("persistence_failure"))
+    response=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation())
+    assert response.status_code==503
+    assert response.json()["detail"]=={
+        "code":"persistence_failure","message":"Learning request could not be completed."}
+    assert [(event["stage"],event["result"]) for event in quiz_events(caplog)][-2:]==[
+        ("persistence","started"),("persistence","failed")]
+    assert not state["definitions"] and not state["bindings"]
+    assert "trusted full lecture context" not in caplog.text
+    assert "correct_option_id" not in caplog.text
+    orch.generate.assert_awaited_once()
+
+
+def test_artifact_persistence_failure_is_sanitized_and_observable(learning,caplog):
+    client,store,state,orch,_,_=learning
+    caplog.set_level(logging.INFO,logger="uvicorn.error")
+    store.put=MagicMock(side_effect=ValueError("persistence_failure"))
+    response=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation())
+    assert response.status_code==503
+    assert response.json()["detail"]=={
+        "code":"persistence_failure","message":"Learning request could not be completed."}
+    events=[(event["stage"],event["result"]) for event in quiz_events(caplog)]
+    assert events[-4:]==[("persistence","started"),("persistence","passed"),
+                        ("artifact_persistence","started"),("artifact_persistence","failed")]
+    assert len(state["definitions"])==1 and not state["bindings"]
     assert "trusted full lecture context" not in caplog.text
     assert "correct_option_id" not in caplog.text
     orch.generate.assert_awaited_once()
