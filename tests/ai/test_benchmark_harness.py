@@ -6,6 +6,7 @@ from backend.services.ai.benchmark_harness import (
     BenchmarkFixture,
     BenchmarkHarness,
     BenchmarkTarget,
+    SyntheticBenchmarkSource,
 )
 from backend.services.ai.flashcard_service import FlashcardService
 from backend.services.ai.provider_base import LLMResult
@@ -40,12 +41,15 @@ def flashcard_payload():
 
 
 class FakeProvider:
-    def __init__(self, provider, model, content, *, fail=False, secret_error=False):
+    def __init__(self, provider, model, content, *, fail=False, secret_error=False,
+                 result_provider=None, result_model=None):
         self.provider = provider
         self.model = model
         self.content = content
         self.fail = fail
         self.secret_error = secret_error
+        self.result_provider = result_provider
+        self.result_model = result_model
         self.calls = []
 
     async def generate(self, prompt, system_prompt=None, **kwargs):
@@ -54,11 +58,13 @@ class FakeProvider:
             raise RuntimeError("SECRET_API_KEY=do-not-leak")
         if self.fail:
             return LLMResult(
-                "error", self.provider, self.model, "SECRET_PROVIDER_BODY", 5.0,
+                "error", self.result_provider or self.provider,
+                self.result_model or self.model, "SECRET_PROVIDER_BODY", 5.0,
                 error_code="SERVICE_UNAVAILABLE",
             )
         result = LLMResult(
-            "success", self.provider, self.model, json.dumps(self.content), 12.5,
+            "success", self.result_provider or self.provider,
+            self.result_model or self.model, json.dumps(self.content), 12.5,
             usage={"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
         )
         result.first_token_latency_ms = 3.5
@@ -68,14 +74,25 @@ class FakeProvider:
         return {"provider": self.provider, "model": self.model, "status": "available"}
 
 
-def fixture(task):
+def source(course_id="INT1339", **overrides):
+    values = {
+        "course_id": course_id,
+        "source_id": "synthetic-lecture-1",
+        "content": CONTEXT,
+        "version": "synthetic-v1",
+    }
+    values.update(overrides)
+    return SyntheticBenchmarkSource(**values)
+
+
+def fixture(task, *, course_id="INT1339", sources=None):
     return BenchmarkFixture(
         task=task,
+        course_id=course_id,
         topic="Python",
         count=1,
         difficulty="easy",
-        verified_context=CONTEXT,
-        source_metadata={"course_id": "INT1339", "source_id": "lecture-1"},
+        sources=tuple(sources or (source(course_id),)),
     )
 
 
@@ -85,8 +102,8 @@ def fixture(task):
     ("flashcard", flashcard_payload()),
 ])
 async def test_multiple_targets_use_same_fixture_contract_and_metrics(task, payload):
-    first = FakeProvider("ollama", "qwen", payload)
-    second = FakeProvider("gemini", "flash", payload)
+    first = FakeProvider("ollama", "qwen2.5:3b", payload)
+    second = FakeProvider("gemini", "gemini-2.5-flash", payload)
     targets = [
         BenchmarkTarget(first, input_cost_per_million=1.0, output_cost_per_million=2.0),
         BenchmarkTarget(second, input_cost_per_million=1.0, output_cost_per_million=2.0),
@@ -112,8 +129,8 @@ async def test_multiple_targets_use_same_fixture_contract_and_metrics(task, payl
 
 @pytest.mark.asyncio
 async def test_one_target_failure_does_not_abort_run():
-    failed = FakeProvider("broken", "model-a", quiz_payload(), fail=True)
-    healthy = FakeProvider("healthy", "model-b", quiz_payload())
+    failed = FakeProvider("ollama", "qwen2.5:3b", quiz_payload(), fail=True)
+    healthy = FakeProvider("deepseek", "deepseek-chat", quiz_payload())
 
     result = await BenchmarkHarness().run(
         fixture("quiz"), [BenchmarkTarget(failed), BenchmarkTarget(healthy)]
@@ -128,8 +145,8 @@ async def test_one_target_failure_does_not_abort_run():
 async def test_semantic_failure_is_distinct_from_structural_failure():
     unsupported = quiz_payload()
     unsupported["questions"][0]["grounding_evidence"] = "Unrelated secret context."
-    semantic = FakeProvider("mock", "semantic", unsupported)
-    structural = FakeProvider("mock", "structural", {"questions": []})
+    semantic = FakeProvider("ollama", "qwen2.5:3b", unsupported)
+    structural = FakeProvider("deepseek", "deepseek-chat", {"questions": []})
 
     result = await BenchmarkHarness().run(
         fixture("quiz"), [BenchmarkTarget(semantic), BenchmarkTarget(structural)]
@@ -148,7 +165,8 @@ async def test_flashcard_semantic_failure_uses_same_grounding_category():
     unsupported["flashcards"][0]["grounding_evidence"] = "Unrelated context."
 
     result = await BenchmarkHarness().run(
-        fixture("flashcard"), [BenchmarkTarget(FakeProvider("mock", "cards", unsupported))]
+        fixture("flashcard"), [BenchmarkTarget(
+            FakeProvider("ollama", "qwen2.5:3b", unsupported))]
     )
 
     assert result["results"][0]["failure_category"] == "grounding_failure"
@@ -158,13 +176,14 @@ async def test_flashcard_semantic_failure_uses_same_grounding_category():
 
 @pytest.mark.asyncio
 async def test_metrics_never_include_provider_content_exception_or_secrets():
-    provider = FakeProvider("SECRET provider", "SECRET model", quiz_payload(), secret_error=True)
+    provider = FakeProvider(
+        "ollama", "qwen2.5:3b", quiz_payload(), secret_error=True)
 
     result = await BenchmarkHarness().run(fixture("quiz"), [BenchmarkTarget(provider)])
     encoded = json.dumps(result)
 
-    assert result["results"][0]["provider"] == "unknown"
-    assert result["results"][0]["model"] == "unknown"
+    assert result["results"][0]["provider"] == "ollama"
+    assert result["results"][0]["model"] == "qwen2.5:3b"
     assert result["results"][0]["failure_category"] == "provider_failure"
     assert "SECRET" not in encoded
     assert "do-not-leak" not in encoded
@@ -173,11 +192,81 @@ async def test_metrics_never_include_provider_content_exception_or_secrets():
 def test_fixture_rejects_unverified_or_unsupported_inputs():
     with pytest.raises(ValueError, match="invalid benchmark fixture"):
         BenchmarkFixture(
-            task="chat", topic="Python", count=1, difficulty="easy",
-            verified_context=CONTEXT,
+            task="chat", course_id="INT1339", topic="Python", count=1,
+            difficulty="easy", sources=(source(),),
         )
     with pytest.raises(ValueError, match="invalid benchmark fixture"):
         BenchmarkFixture(
-            task="quiz", topic="Python", count=1, difficulty="easy",
-            verified_context=" ",
+            task="quiz", course_id="INT1339", topic="Python", count=1,
+            difficulty="easy", sources=(),
         )
+
+
+@pytest.mark.asyncio
+async def test_cross_course_source_is_rejected_before_provider_invocation():
+    provider = FakeProvider("ollama", "qwen2.5:3b", quiz_payload())
+    benchmark_fixture = fixture("quiz", course_id="INT1339")
+    object.__setattr__(benchmark_fixture.sources[0], "course_id", "INT2001")
+
+    with pytest.raises(ValueError, match="^invalid benchmark fixture$"):
+        await BenchmarkHarness().run(
+            benchmark_fixture, [BenchmarkTarget(provider)])
+
+    assert provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_inactive_source_is_rejected_before_provider_invocation():
+    provider = FakeProvider("ollama", "qwen2.5:3b", quiz_payload())
+    benchmark_fixture = fixture("quiz")
+    object.__setattr__(benchmark_fixture.sources[0], "status", "INACTIVE")
+
+    with pytest.raises(ValueError, match="^invalid benchmark fixture$"):
+        await BenchmarkHarness().run(
+            benchmark_fixture, [BenchmarkTarget(provider)])
+
+    assert provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_arbitrary_or_inconsistent_metadata_cannot_bypass_source_validation():
+    provider = FakeProvider("ollama", "qwen2.5:3b", quiz_payload())
+    benchmark_fixture = fixture("quiz")
+    object.__setattr__(benchmark_fixture.sources[0], "content_sha256", "0" * 64)
+
+    with pytest.raises(ValueError, match="^invalid benchmark fixture$"):
+        await BenchmarkHarness().run(
+            benchmark_fixture, [BenchmarkTarget(provider)])
+    with pytest.raises(TypeError):
+        BenchmarkFixture(
+            task="quiz", course_id="INT1339", topic="Python", count=1,
+            difficulty="easy", sources=(source(),),
+            source_metadata={"course_id": "INT2001", "status": "ACTIVE"},
+        )
+
+    assert provider.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail", [False, True])
+async def test_raw_token_shaped_result_identity_never_reaches_report_or_errors(fail):
+    token = "sk-private-token"
+    provider = FakeProvider(
+        "ollama", "qwen2.5:3b", quiz_payload(),
+        fail=fail, result_provider=token, result_model=token,
+    )
+
+    result = await BenchmarkHarness().run(
+        fixture("quiz"), [BenchmarkTarget(provider)]
+    )
+    encoded = json.dumps(result)
+
+    assert result["results"][0]["provider"] == "ollama"
+    assert result["results"][0]["model"] == "qwen2.5:3b"
+    assert result["results"][0]["status"] == ("failure" if fail else "success")
+    assert token not in encoded
+
+    with pytest.raises(ValueError) as raised:
+        BenchmarkTarget(FakeProvider(token, token, quiz_payload()))
+    assert str(raised.value) == "unsupported benchmark target"
+    assert token not in str(raised.value)

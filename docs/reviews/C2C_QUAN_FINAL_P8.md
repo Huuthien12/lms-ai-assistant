@@ -75,6 +75,13 @@ sequentially with the same immutable fixture and `temperature=0`, and uses the
 production structural and semantic validators. It never creates a Quiz,
 attempt, Flashcard, answer or learning-evidence record.
 
+The harness accepts only `SyntheticBenchmarkSource` values. It validates the
+fixture course against every source, requires ACTIVE status, verifies the
+content hash, derives source metadata internally, and rejects arbitrary
+production context strings or caller-supplied metadata before invoking any
+provider. Provider/model report labels come from a static allowlist. Raw
+identifiers returned by a provider are never copied into the report.
+
 Each result has the same schema:
 
 - `provider`, `model`;
@@ -89,7 +96,7 @@ Each result has the same schema:
 - estimated USD cost when both token usage and caller-supplied prices are
   available, otherwise `null`.
 
-Provider content, prompts, verified context, exception text and credentials are
+Provider content, prompts, synthetic context, exception text and credentials are
 never included in the report. One target failure is caught and recorded without
 stopping later targets. Tests cover two provider/model configurations, identical
 calls, Quiz and Flashcard contracts, provider failure isolation, structural
@@ -106,17 +113,22 @@ from backend.services.ai.benchmark_harness import (
     BenchmarkFixture,
     BenchmarkHarness,
     BenchmarkTarget,
+    SyntheticBenchmarkSource,
 )
 from backend.services.ai.deepseek_provider import DeepSeekProvider
 from backend.services.ai.ollama_provider import OllamaProvider
 
 fixture = BenchmarkFixture(
     task="quiz",
+    course_id="INT1339",
     topic="Python",
     count=5,
     difficulty="medium",
-    verified_context=verified_context,
-    source_metadata=trusted_source_metadata,
+    sources=(SyntheticBenchmarkSource(
+        course_id="INT1339",
+        source_id="synthetic-python-v1",
+        content=synthetic_public_context,
+    ),),
 )
 targets = [
     BenchmarkTarget(OllamaProvider(model="qwen2.5:3b")),
@@ -128,9 +140,9 @@ report = asyncio.run(BenchmarkHarness().run(fixture, targets))
 print(json.dumps(report, indent=2))
 ```
 
-Any additional provider, including a Gemini adapter, participates through the
-same existing `LLMProvider` interface and receives the same fixture/evaluator.
-Secrets stay in provider configuration and are not part of the harness result.
+Additional provider/model pairs participate through the existing `LLMProvider`
+interface after their static public identity is added to the harness allowlist.
+Secrets stay in provider configuration and are not part of the result.
 
 ## Verification
 
@@ -177,3 +189,23 @@ acceptance/configuration actions, not remaining implementation.
 Thiện can select provider/model targets, execute the live benchmark, and
 aggregate the returned metrics. No production/live benchmark campaign, live
 Quiz mutation, merge, or project-main update was performed here.
+
+## Benchmark security correction
+
+Candidate base `239f887ef17ecfda79c70739eacc17bed420869e` was reviewed on
+2026-10-16. The benchmark no longer accepts arbitrary context strings or source
+metadata. It accepts only ACTIVE `SyntheticBenchmarkSource` instances, checks
+course consistency and content hashes again at run time, and derives provider
+input metadata from those immutable fields. Cross-course, inactive and
+inconsistent sources fail before any provider call.
+
+Provider/model labels now come from a static allowlist and are revalidated at
+run time. Raw identities in successful or failed `LLMResult` objects are
+ignored. Regression tests prove that `sk-private-token` is absent from both
+serialized reports and controlled error output.
+
+Current correction verification: benchmark security **12 passed**; focused
+benchmark/Flashcard persistence/deterministic grading security **260 passed**
+with 39 warnings; full backend/domain suite **1107 passed + 16 subtests** with
+58 warnings. Live Moodle/runtime acceptance and a live provider benchmark remain
+unverified and were not run as part of this correction.
