@@ -249,10 +249,15 @@ async def test_arbitrary_or_inconsistent_metadata_cannot_bypass_source_validatio
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fail", [False, True])
-async def test_raw_token_shaped_result_identity_never_reaches_report_or_errors(fail):
+@pytest.mark.parametrize(("configured_provider", "configured_model"), [
+    ("ollama", "qwen2.5:3b"),
+    ("fallback", "provider-chain"),
+])
+async def test_raw_token_shaped_result_identity_never_reaches_report_or_errors(
+        fail, configured_provider, configured_model):
     token = "sk-private-token"
     provider = FakeProvider(
-        "ollama", "qwen2.5:3b", quiz_payload(),
+        configured_provider, configured_model, quiz_payload(),
         fail=fail, result_provider=token, result_model=token,
     )
 
@@ -261,8 +266,8 @@ async def test_raw_token_shaped_result_identity_never_reaches_report_or_errors(f
     )
     encoded = json.dumps(result)
 
-    assert result["results"][0]["provider"] == "ollama"
-    assert result["results"][0]["model"] == "qwen2.5:3b"
+    assert result["results"][0]["provider"] == configured_provider
+    assert result["results"][0]["model"] == configured_model
     assert result["results"][0]["status"] == ("failure" if fail else "success")
     assert token not in encoded
 

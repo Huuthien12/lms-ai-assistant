@@ -204,8 +204,8 @@ run time. Raw identities in successful or failed `LLMResult` objects are
 ignored. Regression tests prove that `sk-private-token` is absent from both
 serialized reports and controlled error output.
 
-Current correction verification: benchmark security **12 passed**; focused
-benchmark/Flashcard persistence/deterministic grading security **260 passed**
-with 39 warnings; full backend/domain suite **1107 passed + 16 subtests** with
+Current correction verification: benchmark security **14 passed**; focused
+benchmark/Flashcard persistence/deterministic grading security **262 passed**
+with 39 warnings; full backend/domain suite **1109 passed + 16 subtests** with
 58 warnings. Live Moodle/runtime acceptance and a live provider benchmark remain
 unverified and were not run as part of this correction.
