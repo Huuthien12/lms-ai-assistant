@@ -260,6 +260,38 @@ async def test_empty_context_never_calls_provider():
 
 
 @pytest.mark.asyncio
+async def test_expired_generation_deadline_never_persists_quiz():
+    state,_,gen,_,_,_=composition()
+    with pytest.raises(ValueError,match="^LEARNING_GENERATION_TIMEOUT$"):
+        await gen.generate_quiz(SCOPE,context(),topic="topic",question_count=1,
+                                difficulty="easy",deadline=0)
+    assert state["definitions"]=={}
+
+
+@pytest.mark.asyncio
+async def test_quiz_schema_failure_retries_once_then_persists_valid_result():
+    state,provider,gen,_,_,_=composition()
+    valid=provider.generate.return_value
+    provider.generate.side_effect=[LLMResult("success","test","test","not-json",0),valid]
+    result=await gen.generate_quiz(SCOPE,context(),topic="topic",question_count=1,
+                                   difficulty="easy",timeout_seconds=10)
+    assert result["quiz_id"] in state["definitions"]
+    assert provider.generate.await_count==2
+
+
+@pytest.mark.asyncio
+async def test_flashcard_schema_failure_retries_once_then_persists_valid_result():
+    state,provider,gen,_,_,_=composition()
+    valid=LLMResult("success","test","test",json.dumps({"flashcards":[{
+        "front_text":"One?","back_text":"A","topic":"topic","difficulty":"easy"}]}),0)
+    provider.generate.side_effect=[LLMResult("success","test","test","not-json",0),valid]
+    result=await gen.generate_flashcards(SCOPE,context(),topic="topic",count=1,
+                                         difficulty="easy",timeout_seconds=10)
+    assert result["flashcards"][0]["flashcard_id"] in state["cards"]
+    assert provider.generate.await_count==2
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("scope", [LearningScope(owner_id="other", course_id="course-1"),
                                    LearningScope(owner_id="student-1", course_id="other")])
 async def test_private_quiz_read_and_start_cannot_cross_scope(scope):

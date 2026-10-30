@@ -17,8 +17,9 @@ def inject_theme(st) -> None:
     st.markdown(
         f"""
         <style>
-        .stApp {{ background: {BACKGROUND}; color: {TEXT_PRIMARY}; }}
-        .block-container {{ max-width:none; padding:1.5rem 2rem 2.5rem; }}
+        .stApp {{ background:linear-gradient(180deg,#F8FAFF 0,#F5F7FB 28rem); color: {TEXT_PRIMARY}; }}
+        .block-container {{ max-width:1280px; padding:1.75rem 2rem 2.5rem; }}
+        h1,h2,h3 {{ letter-spacing:-.02em; }}
         .lms-topbar {{ display:flex; justify-content:space-between; align-items:center;
           background:{SURFACE}; border:1px solid #E2E8F0; border-radius:14px;
           padding:.8rem 1.25rem; margin-bottom:1.5rem; box-shadow:0 2px 10px rgba(15,23,42,.05); }}
@@ -54,6 +55,12 @@ def inject_theme(st) -> None:
         [data-testid="stSidebar"] .st-key-sidebar_bottom_actions {{ position:absolute; right:.8rem; bottom:1rem; left:.8rem; }}
         [data-testid="stSidebarUserContent"] > div:first-child {{ display:flex; flex-direction:column; min-height:100%; height:100%; }}
         [data-testid="stSidebarUserContent"] .st-key-sidebar_bottom_actions {{ margin-top:auto; }}
+         [data-testid="stSidebar"] [data-testid="stSidebarUserContent"] p,
+         [data-testid="stSidebar"] [data-testid="stSidebarUserContent"] label,
+         [data-testid="stSidebar"] [data-testid="stSidebarUserContent"] [data-testid="stWidgetLabel"] p {{ color:#E7F1FF; }}
+         [data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] > div,
+         [data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] input {{ background:#fff; color:#0F2744; }}
+         [data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] svg {{ fill:#0F2744; }}
         .sidebar-brand {{ display:flex; align-items:center; gap:.75rem; padding:.35rem .45rem 1.25rem; color:#fff; }}
         .sidebar-brand > span {{ width:38px; height:38px; display:grid; place-items:center; border-radius:11px; background:rgba(255,255,255,.12); color:#fff; font-size:1.35rem; }}
         .sidebar-brand strong {{ display:block; font-size:1.2rem; }} .sidebar-brand small {{ display:block; margin-top:.1rem; color:#B8D8FF; font-size:.76rem; }}
@@ -70,6 +77,40 @@ def inject_theme(st) -> None:
         .student-welcome span {{ font-size:.8rem; opacity:.85; }} .student-welcome h1 {{ margin:.35rem 0; color:#fff; font-size:1.8rem; }}
         .student-welcome p {{ margin:0; opacity:.9; }} .welcome-orbit {{ width:112px; height:112px; display:grid; place-items:center; border:1px solid rgba(255,255,255,.3); border-radius:50%; font-size:2rem; transform:rotate(-12deg); }}
         .welcome-orbit span {{ font-size:3.2rem; opacity:.35; }}
+        .verified-dashboard-header {{ display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:.85rem 1.1rem;
+          margin:0 0 .75rem; border:1px solid #D9E4FF; border-radius:14px; background:#FFFFFF; }}
+        .verified-dashboard-header p {{ margin:0 0 .35rem; color:#4F46E5; font-size:.72rem; font-weight:800; letter-spacing:.09em; }}
+        .verified-dashboard-header h1 {{ margin:0; color:#172554; font-size:1.25rem; }}
+        .verified-dashboard-header span {{ display:block; margin-top:.45rem; color:#587095; }}
+        .verified-dashboard-header strong {{ flex:none; color:#3730A3; background:#E0E7FF; border-radius:999px; padding:.5rem .8rem; font-size:.85rem; }}
+        [class*="st-key-course_card_"] {{ padding:.35rem; border:1px solid #DCE6F5; border-radius:15px; background:#fff;
+          box-shadow:0 2px 10px rgba(15,23,42,.045); transition:transform 160ms ease,box-shadow 160ms ease,border-color 160ms ease; }}
+        [class*="st-key-course_card_"]:hover {{ transform:translateY(-2px); border-color:#A5B4FC; box-shadow:0 10px 24px rgba(49,46,129,.10); }}
+        [class*="st-key-course_card_"] button {{ min-height:64px; justify-content:flex-start; padding:.9rem; text-align:left; font-weight:750; }}
+        [class*="st-key-course_card_"] + [data-testid="stCaptionContainer"] {{ margin:0 .9rem .55rem; color:#64748B; font-size:.78rem; }}
+        .document-workspace-header {{ display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:.85rem 1.1rem;
+          margin:0 0 .75rem; border:1px solid #D9E4FF; border-radius:14px; background:#FFFFFF; }}
+        .document-workspace-header p {{ margin:0 0 .35rem; color:#4F46E5; font-size:.72rem; font-weight:800; letter-spacing:.09em; }}
+        .document-workspace-header h1 {{ margin:0; color:#172554; font-size:1.25rem; }}
+        .document-workspace-header span {{ display:block; margin-top:.25rem; color:#587095; font-size:.86rem; }}
+        .document-workspace-header strong {{ flex:none; color:#3730A3; background:#E0E7FF; border-radius:999px; padding:.5rem .8rem; font-size:.85rem; }}
+        .document-publication-card {{ display:flex; align-items:center; gap:.85rem; margin:.55rem 0; min-height:64px; padding:.7rem .85rem; border:1px solid #DCE6F5;
+          border-radius:14px; background:#fff; box-shadow:0 2px 10px rgba(15,23,42,.035); }}
+        .document-publication-icon {{ width:44px; height:44px; flex:0 0 44px; display:grid; place-items:center; border-radius:11px; color:#4338CA; background:#E0E7FF; }}
+        .document-publication-card > div:not(.document-publication-icon) {{ min-width:0; flex:1; }} .document-publication-id {{ color:#51647E; font-size:.72rem; font-weight:750; letter-spacing:.04em; }}
+        .document-publication-card h3 {{ overflow-wrap:anywhere; margin:.28rem 0; color:#172554; font-size:1rem; }}
+        .document-publication-card p {{ overflow-wrap:anywhere; margin:0; color:#64748B; font-size:.78rem; line-height:1.45; }}
+        .document-publication-status {{ flex:none; color:#166534; background:#DCFCE7; border-radius:999px; padding:.3rem .55rem; font-size:.73rem; font-weight:750; }}
+        .login-shell {{ max-width:540px; margin:5vh auto 1.35rem; padding:2rem; border:1px solid #D9E4FF; border-radius:22px; background:linear-gradient(135deg,#FFFFFF,#EEF2FF); box-shadow:0 18px 42px rgba(30,41,59,.10); }}
+        .login-brand {{ display:flex; align-items:center; gap:.55rem; color:#4338CA; font-size:1.1rem; font-weight:800; }}
+        .login-shell p {{ margin:1.8rem 0 .45rem; color:#4F46E5; font-size:.72rem; font-weight:800; letter-spacing:.1em; }}
+        .login-shell h1 {{ margin:0; color:#172554; font-size:2rem; }}
+        .login-shell > span {{ display:block; margin-top:.65rem; color:#64748B; line-height:1.55; }}
+        [data-testid="stTabs"] {{ margin-top:1.5rem; }}
+        [data-testid="stTabs"] [role="tablist"] {{ gap:.25rem; border-bottom:1px solid #DCE6F5; }}
+        [data-testid="stTabs"] [role="tab"] {{ height:42px; padding:0 .9rem; color:#64748B; font-weight:650; }}
+        [data-testid="stTabs"] [aria-selected="true"] {{ color:#4338CA; }}
+        [data-testid="stAlert"] {{ border-radius:14px; }}
         .metric-card {{ display:flex; background:{SURFACE}; border:1px solid #E2E8F0; border-radius:16px; margin:1.2rem 0 1.6rem; box-shadow:0 2px 10px rgba(15,23,42,.045); }}
         .metric-item {{ flex:1; display:grid; justify-items:center; gap:.45rem; padding:1.1rem; color:{TEXT_PRIMARY}; }}
         .metric-item + .metric-item {{ border-left:1px solid #E2E8F0; }} .metric-item span {{ color:{PRIMARY}; font-size:.75rem; }}
@@ -108,7 +149,7 @@ def inject_theme(st) -> None:
         .status-badge.success {{ background:#DCFCE7; color:#15803D; }} .status-badge.warning {{ background:#FEF3C7; color:#B45309; }} .status-badge.error {{ background:#FEE2E2; color:#B91C1C; }} .status-badge.muted {{ background:#E8EEF7; color:#53657D; }}
         .lms-empty {{ min-height:230px; display:grid; place-content:center; gap:.45rem; text-align:center; padding:2rem; }} .lms-empty h3 {{ margin:0; color:#071B4D; }} .lms-empty p {{ margin:0; }} .state-icon {{ width:72px; height:72px; margin:auto; display:grid; place-items:center; border-radius:22px; background:#E7F1FF; color:{PRIMARY}; font-size:2rem; }} .error-state .state-icon {{ background:#FEE2E2; color:{ERROR}; }}
         [data-testid="stRadio"] > div {{ gap:.45rem; flex-wrap:wrap; }} [data-testid="stRadio"] label {{ background:{SURFACE}; border:1px solid #D7E2F2; border-radius:999px; padding:.35rem .7rem; color:#405675; }} [data-testid="stRadio"] label:has(input:checked) {{ background:{PRIMARY_LIGHT}; border-color:{PRIMARY}; color:{PRIMARY_DARK}; font-weight:700; }}
-        @media (max-width: 850px) {{ [data-testid="stSidebar"], [data-testid="stSidebar"] > div:first-child {{ min-width:auto !important; width:auto !important; }} [data-testid="stSidebarCollapsedControl"] {{ display:flex !important; }} .metric-card {{ flex-direction:column; }} .metric-item + .metric-item {{ border-left:0; border-top:1px solid #E2E8F0; }} .student-welcome {{ padding:1.35rem; }} }}
+        @media (max-width: 850px) {{ .block-container {{ padding:1rem 1rem 2rem; }} [data-testid="stSidebar"], [data-testid="stSidebar"] > div:first-child {{ min-width:auto !important; width:auto !important; }} [data-testid="stSidebarCollapsedControl"] {{ display:flex !important; }} .metric-card {{ flex-direction:column; }} .metric-item + .metric-item {{ border-left:0; border-top:1px solid #E2E8F0; }} .student-welcome {{ padding:1.35rem; }} .verified-dashboard-header,.document-workspace-header {{ align-items:flex-start; flex-direction:column; }} .document-publication-card {{ flex-wrap:wrap; }} .document-publication-status {{ margin-left:46px; }} .login-shell {{ margin:1rem 0; padding:1.35rem; }} .login-shell h1 {{ font-size:1.55rem; }} [data-testid="stTabs"] [role="tab"] {{ padding:0 .55rem; font-size:.82rem; }} }}
         </style>
         """,
         unsafe_allow_html=True,

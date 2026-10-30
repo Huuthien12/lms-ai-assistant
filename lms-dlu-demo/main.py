@@ -20,6 +20,13 @@ from pathlib import Path
 from typing import Optional
 
 
+def cors_origins(value: str | None) -> list[str]:
+    origins = [item.strip() for item in (value or "http://127.0.0.1:8502,http://localhost:8502").split(",") if item.strip()]
+    if not origins or "*" in origins or any(not item.startswith(("http://", "https://")) for item in origins):
+        raise ValueError("LMS_CORS_ORIGINS must be explicit http(s) origins")
+    return origins
+
+
 # ==============================================================================
 # 1. FASTAPI APP
 # ==============================================================================
@@ -37,7 +44,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins(os.getenv("LMS_CORS_ORIGINS")),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -61,11 +68,10 @@ from deeptutor_integration.api import create_router as create_deeptutor_router
 from deeptutor_integration.contracts import DocumentInput
 from deeptutor_integration.errors import DeepTutorError
 from deeptutor_integration.verified_publication import VerifiedPublicationService
-from backend.services.ai.deepseek_provider import DeepSeekProvider
-from backend.services.ai.fallback_provider import FallbackAIProvider
 from backend.services.ai.grounded_chat import GroundedChatService
 from backend.services.ai.ollama_provider import OllamaProvider
-from backend.services.ai.orchestrator import AIOrchestrator
+from backend.services.ai.demo_chat_provider import build_demo_chat_orchestrator
+from backend.services.ai.learning_provider import build_learning_generation_orchestrator
 from grounded_chat_router import create_grounded_chat_router
 from course_query_auth import create_moodle_query_authorizer
 from verified_identity_router import create_identity_router
@@ -140,19 +146,17 @@ app.include_router(create_moodle_ingestion_router(
     service_token=os.getenv("LMS_MOODLE_DISCOVERY_TOKEN"), publication_service=VERIFIED_PUBLICATIONS,
 ))
 
-_deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
 _ollama_provider = OllamaProvider(
     model=os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
     base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
     timeout_seconds=float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120")),
 )
-GROUNDED_CHAT_SERVICE = (
-    GroundedChatService(AIOrchestrator(FallbackAIProvider(
-        DeepSeekProvider(_deepseek_api_key), _ollama_provider
-    )))
-    if _deepseek_api_key
-    else GroundedChatService(AIOrchestrator(_ollama_provider))
+GROUNDED_CHAT_SERVICE = GroundedChatService(
+    build_demo_chat_orchestrator(DEEPTUTOR_CONFIG.deeptutor_dir, os.environ),
+    top_k=int(os.getenv("AI_TUTOR_TOP_K", "3")),
 )
+LEARNING_GENERATION_ORCHESTRATOR=build_learning_generation_orchestrator(
+    DEEPTUTOR_CONFIG.deeptutor_dir,os.environ)
 app.include_router(create_grounded_chat_router(
     DEEPTUTOR_SERVICE, GROUNDED_CHAT_SERVICE, query_authorizer=QUERY_AUTHORIZER,
     publication_service=VERIFIED_PUBLICATIONS,
@@ -169,6 +173,10 @@ def get_connection():
 
     try:
 
+        query_timeout = int(os.getenv("LMS_DB_QUERY_TIMEOUT_SECONDS", "10"))
+        lock_timeout_ms = int(os.getenv("LMS_DB_LOCK_TIMEOUT_MS", "10000"))
+        if query_timeout <= 0 or lock_timeout_ms <= 0:
+            raise ValueError("Database timeout configuration must be positive.")
         connection_string = (
             f"DRIVER={{{ODBC_DRIVER}}};"
             f"SERVER={SERVER};"
@@ -182,6 +190,8 @@ def get_connection():
             connection_string
         )
 
+        connection.timeout = query_timeout
+        connection.cursor().execute(f"SET LOCK_TIMEOUT {lock_timeout_ms}")
         return connection
 
     except Exception as e:
@@ -198,7 +208,8 @@ from verified_learning_repository import VerifiedLearningRepository
 from verified_learning_router import create_verified_learning_router
 VERIFIED_LEARNING = VerifiedLearningRepository(get_connection, QUIZ_REPOSITORY, LEARNING_EVIDENCE)
 app.include_router(create_verified_learning_router(QUERY_AUTHORIZER,VERIFIED_PUBLICATIONS,VERIFIED_LEARNING,
-    GROUNDED_CHAT_SERVICE.orchestrator,GROUNDED_CHAT_SERVICE,RecommendationService(GROUNDED_CHAT_SERVICE.orchestrator)))
+    LEARNING_GENERATION_ORCHESTRATOR,GROUNDED_CHAT_SERVICE,
+    RecommendationService(GROUNDED_CHAT_SERVICE.orchestrator)))
 from legacy_route_security import create_learning_scope_dependency,resource_owner_lookup
 _LEARNING_SCOPE=create_learning_scope_dependency(QUERY_AUTHORIZER,resource_owner_lookup(get_connection))
 _LEARNING_WRITER=create_moodle_service_dependency(os.getenv("LMS_MOODLE_DISCOVERY_TOKEN"))

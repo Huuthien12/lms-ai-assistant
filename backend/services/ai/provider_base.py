@@ -12,6 +12,7 @@ class LLMResult:
     usage: Optional[Dict[str, int]] = field(default_factory=dict)
     error_code: Optional[str] = None
     fallback_used: bool = False
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 class LLMProvider(ABC):
     @abstractmethod
@@ -39,7 +40,8 @@ def safe_result(result: LLMResult) -> LLMResult:
         return result
     code = result.error_code
     known = {"TIMEOUT_OR_NETWORK_ERROR", "RATE_LIMIT", "SERVICE_UNAVAILABLE",
-             "UNKNOWN_ERROR", "INVALID_RESPONSE", "INVALID_REQUEST", "MAX_RETRIES_EXCEEDED"}
+             "UNKNOWN_ERROR", "INVALID_RESPONSE", "INVALID_REQUEST", "MAX_RETRIES_EXCEEDED",
+             "CLOUD_CONTENT_DISABLED", "PROVIDER_UNCONFIGURED", "PROVIDER_ERROR"}
     http_code = (isinstance(code, str) and len(code) == 8
                  and code.startswith("HTTP_") and code[5:].isdigit())
     return replace(result, content="", error_code=code if http_code or (

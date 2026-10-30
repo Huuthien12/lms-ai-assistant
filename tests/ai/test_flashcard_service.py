@@ -2,11 +2,18 @@ import pytest
 import json
 import ast
 import inspect
+import logging
 from copy import deepcopy
 from unittest.mock import AsyncMock, MagicMock
 from backend.services.ai.flashcard_service import FlashcardService
 from backend.services.ai.orchestrator import AIOrchestrator
 from backend.services.ai.provider_base import LLMResult
+
+
+def flashcard_events(caplog):
+    prefix="flashcard_observability "
+    return [json.loads(record.getMessage()[len(prefix):]) for record in caplog.records
+            if record.getMessage().startswith(prefix)]
 
 @pytest.fixture
 def mock_orchestrator():
@@ -128,6 +135,7 @@ async def test_grounded_generation_prompt_and_exact_count(mock_orchestrator):
                         "topic", "difficulty", "do not output source_metadata"):
         assert instruction in call["system_prompt"]
     assert call["temperature"] == 0
+    assert call["response_format"] == {"type":"json_object"}
     mock_orchestrator.generate.assert_awaited_once()
 
 
@@ -150,6 +158,20 @@ async def test_count_mismatch_and_upper_bound(mock_orchestrator):
     mock_orchestrator.generate.return_value.content = json.dumps({"flashcards": [
         {**card, "front_text": f"Distinct front {index}"} for index in range(50)]})
     assert len((await service.generate_grounded_flashcards(**grounded_input(count=50)))["flashcards"]) == 50
+
+
+@pytest.mark.asyncio
+async def test_schema_rejection_logs_safe_field_and_counts(mock_orchestrator,caplog):
+    caplog.set_level(logging.INFO,logger="uvicorn.error")
+    with pytest.raises(ValueError,match="^INVALID_FLASHCARD_SCHEMA$"):
+        await FlashcardService(mock_orchestrator).generate_grounded_flashcards(
+            **grounded_input(count=2),correlation_id="safe-card")
+    rejected=next(event for event in flashcard_events(caplog)
+                  if event["stage"]=="structural_validation" and event["result"]=="rejected")
+    assert rejected["validation_error_category"]=="count"
+    assert rejected["validation_field"]=="flashcards"
+    assert (rejected["expected_count"],rejected["actual_count"])==(2,1)
+    assert grounded_input()["retrieved_context"] not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -283,7 +305,8 @@ def test_service_generation_only_through_orchestrator():
     tree = ast.parse(inspect.getsource(module))
     imports = [node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
     assert [name for name in imports if name.startswith("backend.")] == [
-        "backend.services.ai.orchestrator", "backend.services.ai.provider_base"]
+        "backend.services.ai.orchestrator", "backend.services.ai.provider_base",
+        "backend.services.ai.quiz_service"]
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
              and isinstance(node.func, ast.Attribute) and node.func.attr == "generate"]
     assert len(calls) == 1

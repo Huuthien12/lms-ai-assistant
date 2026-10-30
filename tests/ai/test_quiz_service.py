@@ -19,15 +19,19 @@ def mock_orchestrator():
     valid_quiz_json = json.dumps({
         "questions": [
             {
-                "question": QuizService.GROUNDING_QUESTION_PREFIX + "Python is a ____.",
+                "question": "Trong Python, từ khóa nào dùng để rời một hàm?",
                 "type": "mcq",
                 "options": [
-                    {"id": "A", "text": "programming language"},
-                    {"id": "B", "text": "database"}
+                    {"id": "A", "text": "return"},
+                    {"id": "B", "text": "break"},
+                    {"id": "C", "text": "continue"},
+                    {"id": "D", "text": "pass"},
                 ],
                 "correct_option_id": "A",
                 "explanation": "The answer is copied from the verified excerpt.",
-                "grounding_evidence": "Python is a programming language."
+                "grounding_evidence": "Python uses return to leave a function.",
+                "evidence_id": "e1",
+                "answer_span_id": "a1",
             }
         ]
     })
@@ -165,7 +169,9 @@ async def test_empty_question_text(mock_orchestrator):
 
 def grounded_input(**overrides):
     request = dict(topic="Python", question_count=1, difficulty="medium",
-                   question_types=["mcq"], retrieved_context="Python is a programming language.")
+                   question_types=["mcq"],
+                   retrieved_context="[trusted]\nPython uses return to leave a function.",
+                   source_metadata=[{"source_id": "trusted"}])
     request.update(overrides)
     return request
 
@@ -257,25 +263,34 @@ async def test_exact_count_and_prompt_contract(mock_orchestrator):
     with pytest.raises(ValueError, match="INVALID_QUIZ_SCHEMA"):
         await service.generate_grounded_quiz(**grounded_input(question_count=2))
     call = mock_orchestrator.generate.call_args.kwargs
+    assert call["response_format"] == {"type":"json_object"}
     assert json.loads(call["prompt"])["retrieved_context"] == grounded_input()["retrieved_context"]
     for instruction in ("exactly 2", "outside knowledge", "valid JSON only", "MCQ only",
-                        "correct_option_id", "grounding_evidence", "extractive cloze",
-                        QuizService.GROUNDING_QUESTION_PREFIX, "Do not invent citations"):
+                        "correct_option_id", "grounding_evidence", "evidence_id",
+                        "four distinct options", "Do not invent citations", "LOCKED LITERAL",
+                        "do not generate, infer, summarize, or improve it"):
         assert instruction in call["system_prompt"]
-    evidence = [f"Verified fact {index} contains answer {index}." for index in range(20)]
-    mock_orchestrator.generate.return_value.content = json.dumps({"questions": [
-        {
-            "question": QuizService.GROUNDING_QUESTION_PREFIX
-                        + f"Verified fact {index} contains ____.",
-            "type": "mcq",
-            "options": [{"id": "A", "text": f"answer {index}"},
-                        {"id": "B", "text": f"distractor {index}"}],
+    evidence = (
+        "ALPHA BRAVO CHARLIE DELTA ECHO FOXTROT GOLF HOTEL INDIA JULIET "
+        "KILO LIMA MIKE NOVEMBER OSCAR PAPA QUEBEC ROMEO SIERRA TANGO."
+    )
+    async def generate_from_candidates(**kwargs):
+        candidates = json.loads(kwargs["prompt"])["quiz_candidates"]
+        questions = [{
+            "question": f"Nội dung nào được nêu trong tài liệu ở ý {index}?",
+            "type": "mcq", "evidence_id": candidate["evidence_id"],
+            "answer_span_id": candidate["answer_span_id"],
+            "options": [{"id": "A", "text": candidate["text"]},
+                        {"id": "B", "text": f"distractor {index}b"},
+                        {"id": "C", "text": f"distractor {index}c"},
+                        {"id": "D", "text": f"distractor {index}d"}],
             "correct_option_id": "A",
             "explanation": "Copied from the verified excerpt.",
-            "grounding_evidence": evidence[index],
-        } for index in range(20)]})
+        } for index, candidate in enumerate(candidates, 1)]
+        return LLMResult("success", "mock", "mock-model", json.dumps({"questions": questions}), 10.0)
+    mock_orchestrator.generate = AsyncMock(side_effect=generate_from_candidates)
     result = await service.generate_grounded_quiz(**grounded_input(
-        question_count=20, retrieved_context=" ".join(evidence)))
+        question_count=20, retrieved_context="[trusted]\n" + evidence))
     assert len(result["questions"]) == 20
 
 
@@ -303,12 +318,12 @@ async def test_model_sources_removed_caller_sources_preserved(mock_orchestrator)
     data["questions"][0]["options"][0]["is_correct"] = True
     mock_orchestrator.generate.return_value.content = json.dumps(data)
     service = QuizService(mock_orchestrator)
-    without_sources = await service.generate_grounded_quiz(**grounded_input(), client_facing=False)
+    without_sources = QuizService.validate_and_parse_quiz(data, question_count=1)
     assert "source_metadata" not in without_sources["questions"][0]
-    sources = [{"source_id": "real", "title": "Lecture", "metadata": {"page": 2}}]
+    sources = [{"source_id": "trusted", "title": "Lecture", "metadata": {"page": 2}}]
     expected = deepcopy(sources)
     internal = await service.generate_grounded_quiz(
-        **grounded_input(), source_metadata=sources, client_facing=False)
+        **grounded_input(source_metadata=sources), client_facing=False)
     assert internal["questions"][0]["source_metadata"] == expected
     sources[0]["metadata"]["page"] = 99
     assert internal["questions"][0]["source_metadata"] == expected
@@ -325,6 +340,20 @@ async def test_invalid_output_errors_do_not_expose_raw(mock_orchestrator, raw):
         await QuizService(mock_orchestrator).generate_grounded_quiz(**grounded_input())
     assert raw not in str(raised.value)
     assert raised.value.__suppress_context__ or raised.value.__context__ is None
+
+
+@pytest.mark.asyncio
+async def test_invalid_json_logs_safe_category_without_raw(mock_orchestrator,caplog):
+    caplog.set_level(logging.INFO,logger="uvicorn.error")
+    mock_orchestrator.generate.return_value.content="SECRET_NOT_JSON"
+    with pytest.raises(ValueError,match="^INVALID_QUIZ_SCHEMA"):
+        await QuizService(mock_orchestrator).generate_grounded_quiz(
+            **grounded_input(),correlation_id="safe-quiz")
+    rejected=next(event for event in quiz_events(caplog)
+                  if event["stage"]=="structural_validation" and event["result"]=="rejected")
+    assert rejected["validation_error_category"]=="json_parse"
+    assert rejected["validation_field"]=="root"
+    assert "SECRET_NOT_JSON" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -351,7 +380,7 @@ async def test_provider_failure_observability_is_correlated_and_sanitized(
         status="error", provider="ollama", model="qwen2.5:3b", latency_ms=120000,
         content="SECRET_PROVIDER_BODY", error_code="TIMEOUT_OR_NETWORK_ERROR",
         fallback_used=False)
-    with pytest.raises(ValueError, match="^QUIZ_GENERATION_FAILED$"):
+    with pytest.raises(ValueError, match="^LEARNING_GENERATION_TIMEOUT$"):
         await QuizService(mock_orchestrator).generate_grounded_quiz(
             **grounded_input(retrieved_context="SECRET_CONTEXT", topic="SECRET_TOPIC"),
             correlation_id="deadbeef")
@@ -385,7 +414,7 @@ async def test_semantic_rejection_is_distinct_from_provider_failure(
 ):
     caplog.set_level(logging.INFO, logger="uvicorn.error")
     data = json.loads(mock_orchestrator.generate.return_value.content)
-    data["questions"][0]["grounding_evidence"] = "Unsupported private evidence"
+    data["questions"][0]["evidence_id"] = "unsupported-evidence"
     mock_orchestrator.generate.return_value.content = json.dumps(data)
 
     with pytest.raises(ValueError, match="^INVALID_QUIZ_SCHEMA: unsupported grounding$"):
@@ -399,7 +428,12 @@ async def test_semantic_rejection_is_distinct_from_provider_failure(
         (event["stage"], event["result"]) for event in events}
     assert ("semantic_validation", "rejected") in {
         (event["stage"], event["result"]) for event in events}
-    assert "Unsupported private evidence" not in caplog.text
+    semantic = next(event for event in events
+                    if event["stage"] == "semantic_validation" and event["result"] == "rejected")
+    assert semantic["grounding_failure_reason"] == "evidence_id_not_in_snapshot"
+    assert semantic["source_id_valid"] is False
+    assert semantic["requested_count"] == 1 and semantic["validated_count"] == 0
+    assert "unsupported-evidence" not in caplog.text
     mock_orchestrator.generate.assert_awaited_once()
 
 
@@ -465,7 +499,8 @@ async def test_invalid_sources_rejected_before_provider(mock_orchestrator, legac
         if legacy:
             await QuizService(mock_orchestrator).generate_quiz("Quiz", source_metadata=metadata)
         else:
-            await QuizService(mock_orchestrator).generate_grounded_quiz(**grounded_input(), source_metadata=metadata)
+            await QuizService(mock_orchestrator).generate_grounded_quiz(
+                **grounded_input(source_metadata=metadata))
     assert "SECRET" not in str(error.value)
     mock_orchestrator.generate.assert_not_called()
 
@@ -482,8 +517,10 @@ async def test_sources_snapshot_before_provider_and_public_safe(mock_orchestrato
         return content
     mock_orchestrator.generate.side_effect = generate
     service = QuizService(mock_orchestrator)
-    result = await service.generate_grounded_quiz(**grounded_input(), source_metadata=metadata, client_facing=False)
-    assert result["questions"][0]["source_metadata"] == original
+    result = await service.generate_grounded_quiz(
+        **grounded_input(source_metadata=metadata), client_facing=False)
+    expected = [original] if isinstance(metadata, dict) else original
+    assert result["questions"][0]["source_metadata"] == expected
     assert "source_metadata" not in service.to_public_result(result)["questions"][0]
 
 

@@ -10,7 +10,7 @@ from .errors import DeepTutorError
 
 class FullSourceAdapter(Protocol):
     def publish(self, physical_kb: str, path: Path) -> dict: ...
-    def retrieve(self, physical_kb: str, question: str) -> dict: ...
+    def retrieve(self, physical_kb: str, question: str, timeout_seconds: float | None = None) -> dict: ...
 
 
 class DeepTutorFullSourceAdapter:
@@ -18,7 +18,7 @@ class DeepTutorFullSourceAdapter:
         self.config=config
         self.cli=CliDeepTutorAdapter(config)
 
-    def _raw(self, operation, physical_kb, question=""):
+    def _raw(self, operation, physical_kb, question="", timeout_seconds=None):
         if not self.config.python_executable.is_file():
             raise DeepTutorError("raw_runtime_unavailable","Full-source runtime is unavailable.",status_code=503)
         worker=Path(__file__).with_name("full_source_worker.py")
@@ -27,12 +27,16 @@ class DeepTutorFullSourceAdapter:
         # The bridge imports the existing engine from its own checkout/venv.
         environment["PYTHONPATH"]=str(self.config.deeptutor_dir)
         try:
+            timeout=self.config.command_timeout_seconds if timeout_seconds is None else timeout_seconds
+            if timeout <= 0: raise subprocess.TimeoutExpired("deeptutor",timeout)
             result=subprocess.run([str(self.config.python_executable),str(worker),operation,physical_kb,question],
                 cwd=self.config.deeptutor_dir,env=environment,stdin=subprocess.DEVNULL,
-                capture_output=True,text=True,encoding="utf-8",timeout=self.config.command_timeout_seconds,
+                capture_output=True,text=True,encoding="utf-8",timeout=timeout,
                 shell=False,creationflags=subprocess.CREATE_NO_WINDOW if os.name=="nt" else 0)
             data=json.loads(result.stdout)
             if result.returncode or not isinstance(data,dict): raise ValueError()
+        except subprocess.TimeoutExpired:
+            raise DeepTutorError("retrieval_timeout","Verified retrieval timed out.",status_code=504) from None
         except (OSError,ValueError,subprocess.SubprocessError):
             raise DeepTutorError("raw_retrieval_unavailable","Full-source runtime is unavailable.",status_code=502) from None
         if data.get("needs_reindex"):
@@ -51,5 +55,5 @@ class DeepTutorFullSourceAdapter:
         self.cli.create_knowledge_base(physical_kb,path)
         return self._raw("manifest",physical_kb)
 
-    def retrieve(self, physical_kb, question):
-        return self._raw("search",physical_kb,question)
+    def retrieve(self, physical_kb, question, timeout_seconds=None):
+        return self._raw("search",physical_kb,question,timeout_seconds)

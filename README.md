@@ -70,9 +70,18 @@ From Windows, run:
 lms-dlu-demo\start_lms.bat
 ```
 
-The launcher starts the FastAPI backend on `http://127.0.0.1:8000` and the Streamlit interface on `http://localhost:8501`.
+The launcher starts the FastAPI backend on `http://127.0.0.1:8001` and the Streamlit interface on `http://127.0.0.1:8502`. Both bind only to the local machine.
 
-Demo authentication is disabled unless `LMS_DEMO_AUTH_ENABLED=true` and the demo passwords are supplied through local environment variables.
+### Local demo accounts
+
+The launcher enables the demo-account chooser, but it never ships a Moodle token or a password. Each Windows user must provision their own Moodle personal token into a per-user DPAPI blob before the chooser can log in:
+
+```powershell
+cd lms-dlu-demo
+.\provision_demo_accounts.ps1
+```
+
+The script prompts for each token without echoing it and writes encrypted `*.dpapi` files below `%LOCALAPPDATA%\DeepTutor\demo-accounts`; those files are not part of this repository. The chooser verifies the selected token through `/auth/me` before creating a session. A missing, unreadable, or invalid blob fails closed, and all course actions continue to use the verified Moodle identity and course authorization.
 
 ## Runtime data
 

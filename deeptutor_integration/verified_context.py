@@ -7,6 +7,7 @@ from .contracts import AuthorizedCourseScope
 from .errors import DeepTutorError
 from .moodle_ingestion_ledger import LedgerV2Lifecycle
 from .provenance_contracts import canonical_chunk_sha256, canonical_source_ref
+from backend.services.ai.context_text import clean_context_text
 
 
 @dataclass(frozen=True)
@@ -32,7 +33,7 @@ class VerifiedChunk:
                 "content_sha256":self.content_sha256,"title":self.filename,
                 "publication_ref":self.publication_ref,"index_version":self.index_version,
                 "verification_status":"VERIFIED_ACTIVE","score":self.score,"page":self.page,
-                "preview":self.content[:400]}
+                "preview":clean_context_text(self.content)[:400]}
 
 
 @dataclass(frozen=True)
@@ -86,7 +87,7 @@ def verify_raw_chunks(record, scope, raw):
 def build_context(scope, question, chunks, max_characters=32000):
     # Select whole, already-verified chunks. UI previews never become generation text.
     selected=[]; used=0
-    for chunk in chunks:
+    for chunk in sorted(chunks, key=lambda c: c.score if c.score is not None else float("-inf"), reverse=True):
         size=len(chunk.content)+len(chunk.source_ref)+4
         if used+size<=max_characters: selected.append(chunk); used+=size
     return VerifiedRetrievalContext(scope,question,tuple(selected),uuid4().hex)

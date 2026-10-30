@@ -57,7 +57,7 @@ async def test_provider_error_propagates_failure(mock_orchestrator):
         status="error", provider="mock", model="mock", content="Service unavailable", error_code="HTTP_503", latency_ms=5.0
     ))
     service = ExplanationService(mock_orchestrator)
-    with pytest.raises(ValueError, match="^EXPLANATION_GENERATION_FAILED$"):
+    with pytest.raises(ValueError, match="^LEARNING_PROVIDER_UNAVAILABLE$"):
         await service.generate_explanation("Hỏi?", "Sai", "Đúng", context="Tài liệu XYZ")
 
 
@@ -76,7 +76,8 @@ async def test_prompt_contains_grading_facts_and_grounding_boundary(mock_orchest
     call = mock_orchestrator.generate.call_args.kwargs
     assert json.loads(call["prompt"]) == {
         "question": request["question"], "student_answer": request["student_answer"],
-        "correct_answer": request["correct_answer"], "trusted_retrieved_context": request["context"],
+        "correct_answer": request["correct_answer"], "answer_state": "answered",
+        "trusted_retrieved_context": request["context"],
     }
     for instruction in ("only the supplied trusted", "do not use outside knowledge",
                         "invent citations", "only as grading facts", "already authoritative",
@@ -116,8 +117,17 @@ async def test_none_student_answer_is_explicitly_unanswered(mock_orchestrator):
         **valid_input(student_answer=None))
     call = mock_orchestrator.generate.call_args.kwargs
     assert json.loads(call["prompt"])["student_answer"] is None
-    assert "the question was unanswered" in call["system_prompt"]
+    assert json.loads(call["prompt"])["answer_state"] == "unanswered"
+    assert "do not claim the learner selected" in call["system_prompt"]
     assert result["status"] == "success"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["correct", "incorrect"])
+async def test_answer_state_is_forwarded_without_inference(mock_orchestrator, state):
+    await ExplanationService(mock_orchestrator).generate_explanation(
+        **valid_input(answer_state=state))
+    assert json.loads(mock_orchestrator.generate.call_args.kwargs["prompt"])["answer_state"] == state
 
 
 @pytest.mark.asyncio

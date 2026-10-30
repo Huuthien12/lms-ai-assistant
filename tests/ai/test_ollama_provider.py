@@ -64,3 +64,45 @@ async def test_custom_mapping_and_sampling_options_preserved():
         "num_ctx": 2048, "temperature": 0, "top_p": 0.8, "seed": 42, "num_predict": 20,
     }
     assert original == {"num_ctx": 2048, "temperature": 0.9}
+
+
+@pytest.mark.asyncio
+async def test_request_timeout_is_bounded_and_not_sent_to_ollama(monkeypatch):
+    seen={}
+    class Client:
+        def __init__(self,*,timeout): seen["timeout"]=timeout
+        async def __aenter__(self): return self
+        async def __aexit__(self,*args): pass
+        async def post(self,url,**kwargs):
+            seen["payload"]=kwargs["json"]
+            return httpx.Response(200,json={"message":{"content":"OK"}})
+    monkeypatch.setattr(httpx,"AsyncClient",Client)
+    result=await OllamaProvider(timeout_seconds=30).generate("Hi",timeout_seconds=5)
+    assert result.status=="success" and seen["timeout"]==5
+    assert "timeout_seconds" not in seen["payload"]
+
+
+@pytest.mark.asyncio
+async def test_json_response_format_uses_ollama_json_mode():
+    with patch("httpx.AsyncClient.post",new_callable=AsyncMock,return_value=httpx.Response(
+        200,json={"message":{"content":"{\"questions\":[]}"},"done_reason":"length",
+                  "eval_count":20})) as post:
+        result=await OllamaProvider().generate(
+            "JSON",response_format={"type":"json_object"})
+    assert result.status=="success"
+    payload=post.await_args.kwargs["json"]
+    assert payload["format"]=="json" and "response_format" not in payload
+    assert result.metadata=={
+        "response_length":16,"json_parse_category":"object",
+        "top_level_keys":["questions"],"done_reason":"length","completion_tokens":20,
+    }
+
+
+@pytest.mark.asyncio
+async def test_ollama_http_error_records_status_without_body():
+    with patch("httpx.AsyncClient.post",new_callable=AsyncMock,return_value=httpx.Response(
+        500,text="PRIVATE SERVER DETAIL")):
+        result=await OllamaProvider().generate("JSON",response_format={"type":"json_object"})
+    assert result.error_code=="HTTP_500"
+    assert result.metadata=={"provider_http_status":500}
+    assert "PRIVATE SERVER DETAIL" not in repr(result)

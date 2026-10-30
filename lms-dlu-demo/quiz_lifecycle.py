@@ -271,6 +271,16 @@ def _trusted_questions(questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not isinstance(question_id, str) or not question_id.strip() or question_id in ids:
             raise ValueError("invalid_quiz_definition")
         ids.add(question_id)
+        source_metadata = original.get("source_metadata") if isinstance(original, dict) else None
+        if isinstance(source_metadata, dict):
+            source_metadata = [source_metadata]
+        if isinstance(source_metadata, list):
+            # Source IDs were checked by the generation validator; retain only the
+            # stable locator required to map a post-submit explanation to its source.
+            sources = [{"source_id": source["source_id"]} for source in source_metadata
+                       if isinstance(source, dict) and isinstance(source.get("source_id"), str)]
+            if sources:
+                question["source_metadata"] = sources
         result.append({"question_id": question_id, **question})
     return result
 
