@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+import json
 from unittest.mock import AsyncMock, MagicMock
 from concurrent.futures import ThreadPoolExecutor
 import httpx
@@ -7,7 +8,7 @@ import requests
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from backend.services.ai.grounded_chat import GroundedChatService
+from backend.services.ai.grounded_chat import GroundedChatService, GroundedChatResponse
 from backend.services.ai.provider_base import LLMResult
 from deeptutor_integration.config import DeepTutorConfig
 from deeptutor_integration.contracts import AuthorizedCourseScope, NormalizedDocument
@@ -33,7 +34,7 @@ def runtime(tmp_path,monkeypatch):
         raw={"provider":"llamaindex","index_version":"version-test","publication_ref":kb,
              "chunks":[{"chunk_id":"real-node","content":path.read_text(encoding="utf-8")} ]}
         indexed[kb]=raw; return raw
-    adapter.publish.side_effect=publish; adapter.retrieve.side_effect=lambda kb,q:indexed[kb]
+    adapter.publish.side_effect=publish; adapter.retrieve.side_effect=lambda kb,q,**kwargs:indexed[kb]
     config=DeepTutorConfig(tmp_path,tmp_path/"engine",tmp_path/"cli",tmp_path/"runtime")
     publications=VerifiedPublicationService(config,adapter)
     scope=AuthorizedCourseScope(9,"INT1339","int1339-python","owner","https://moodle.test")
@@ -63,7 +64,7 @@ def test_full_verified_context_citations_update_and_delete_never_send_old_text(r
     assert "TAIL_AFTER_200" in orch.generate.call_args.kwargs["prompt"]
     citation=first.json()["sources"][0]
     assert citation["document_id"]=="1" and citation["verification_status"]=="VERIFIED_ACTIVE"
-    assert citation["source_ref"] in orch.generate.call_args.kwargs["prompt"]
+    assert citation["source_ref"] == json.loads(orch.generate.call_args.kwargs["prompt"])["reference_data"][0]["source_id"]
     pub.publish(scope,document("NEW only"))
     assert client.post(path,json=body,headers=headers).status_code==200
     assert "NEW only" in orch.generate.call_args.kwargs["prompt"] and "OLD" not in orch.generate.call_args.kwargs["prompt"]
@@ -116,3 +117,41 @@ def test_explicit_foreign_kb_rejected_before_raw_retrieval(runtime):
     response=client.post("/lms/chat",json={"question":"Question","course_id":"INT1339","kb_name":"other"},headers={"Authorization":"Bearer A"})
     assert response.status_code==422
     adapter.retrieve.assert_not_called(); orch.generate.assert_not_awaited()
+
+
+def test_cleanup_and_selection_preserve_exact_verified_provenance(runtime):
+    client,pub,scope,adapter,orch,indexed=runtime
+    originals = ["Unrelated recursion", "Phép toán + - * / (cid:42)", "Phép toán + - * / (cid:42)",
+                 "Điều kiện rẽ nhánh", "Kiểm tra chia cho 0"]
+    for i, text in enumerate(originals):
+        pub.publish(scope,document(text).model_copy(update={"document_id":str(i)}))
+    scores = [0.1, 0.95, 0.9, 0.8, 0.7]
+    for raw,score in zip(indexed.values(),scores):
+        raw["chunks"][0]["score"]=score
+    response=client.post("/lms/chat",json={"question":"Giải thích phép toán","course_id":"INT1339"},
+                         headers={"Authorization":"Bearer A"})
+    assert response.status_code==200
+    sources=response.json()["sources"]
+    assert [s["document_id"] for s in sources]==["1","3","4"]
+    assert "(cid:" not in sources[0]["preview"] and "�" in sources[0]["preview"]
+    prompt=json.loads(orch.generate.call_args.kwargs["prompt"])
+    assert [s["source_id"] for s in prompt["reference_data"]]==[s["source_ref"] for s in sources]
+    records={r.document_id:r for r in pub.ledger.snapshot().records.values()}
+    for source in sources:
+        record=records[source["document_id"]]
+        assert source["document_version_id"]==record.document_version_id
+        assert source["chunk_id"]==record.chunk_manifest[0].chunk_id
+        assert source["content_sha256"]==record.chunk_manifest[0].content_sha256
+        assert source["title"]==record.original_filename
+    assert [raw["chunks"][0]["content"] for raw in indexed.values()]==originals
+
+
+def test_chat_cannot_return_unverified_source_identity(runtime,monkeypatch):
+    client,pub,scope,adapter,orch,_=runtime
+    pub.publish(scope,document("Trusted content"))
+    monkeypatch.setattr(GroundedChatService,"chat",AsyncMock(return_value=GroundedChatResponse(
+        "success","Answer",scope.course_key,scope.kb_name,[{"source_id":"fabricated"}],
+        {"provider":"fake","model":"fake","fallback_used":False})))
+    response=client.post("/lms/chat",json={"question":"Question","course_id":"INT1339"},
+                         headers={"Authorization":"Bearer A"})
+    assert response.status_code==502 and "fabricated" not in response.text

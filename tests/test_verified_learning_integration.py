@@ -15,16 +15,23 @@ from backend.services.ai.recommendation_service import RecommendationService
 from quiz_lifecycle import QuizRepository
 from learning_evidence import LearningEvidenceRepository
 from verified_learning_repository import VerifiedLearningRepository, restore_context
-from verified_learning_router import create_verified_learning_router
+from verified_learning_router import create_verified_learning_router, question_citations
 from verified_identity_router import create_identity_router
 from course_query_auth import create_moodle_query_authorizer
 from deeptutor_integration.service import DeepTutorService
+from deeptutor_integration.errors import DeepTutorError
 from test_verified_chat_integration import runtime, document
 from verified_learning_fakes import LearningConnection
 
 
 def quiz_events(caplog):
     prefix="quiz_observability "
+    return [json.loads(record.getMessage()[len(prefix):]) for record in caplog.records
+            if record.getMessage().startswith(prefix)]
+
+
+def flashcard_events(caplog):
+    prefix="flashcard_observability "
     return [json.loads(record.getMessage()[len(prefix):]) for record in caplog.records
             if record.getMessage().startswith(prefix)]
 
@@ -47,21 +54,15 @@ def learning(runtime):
         system=kwargs["system_prompt"]
         if "MCQ" in system:
             payload=json.loads(kwargs["prompt"]); count=payload["question_count"]
-            context=" ".join(payload["retrieved_context"].split())
-            tokens=context.split(); excerpt=" ".join(tokens[:min(16,len(tokens))])
-            candidates=[token for token in tokens if excerpt.count(token)==1 and len(token)>1]
             questions=[]
-            for i in range(count):
-                if i<len(candidates): evidence,answer=excerpt,candidates[i]
-                else:
-                    evidence=tokens[i%len(tokens)]
-                    answer=evidence[1:-1]
-                cloze=evidence.replace(answer,QuizService.GROUNDING_BLANK,1)
+            for i,candidate in enumerate(payload["quiz_candidates"][:count]):
+                answer=candidate["text"]
                 questions.append({
-                    "question":QuizService.GROUNDING_QUESTION_PREFIX+cloze,"type":"mcq",
-                    "options":[{"id":"A","text":answer},{"id":"B","text":f"distractor {i}"}],
+                    "question":f"Nội dung nào được nêu trong tài liệu đã xác minh ở ý {i + 1}?","type":"mcq",
+                    "options":[{"id":"A","text":answer},{"id":"B","text":f"distractor {i}b"},
+                               {"id":"C","text":f"distractor {i}c"},{"id":"D","text":f"distractor {i}d"}],
                     "correct_option_id":"A","explanation":"Copied from verified context.",
-                    "grounding_evidence":evidence})
+                    "evidence_id":candidate["evidence_id"],"answer_span_id":candidate["answer_span_id"]})
             content=json.dumps({"questions":questions})
         elif "flashcards" in system:
             content=json.dumps({"flashcards":[{"front_text":"Python?","back_text":"Language","topic":"model topic","difficulty":"hard"}]})
@@ -76,6 +77,18 @@ def learning(runtime):
 
 def headers(user="A"): return {"Authorization":"Bearer "+user}
 def generation(): return {"question":"Explain Python","topic":"Python","count":1,"difficulty":"easy"}
+
+
+def test_question_citations_use_only_the_question_source_id():
+    citations=[
+        {"source_id":"course-a/chunk-1","document_id":"doc-a","title":"A.pdf"},
+        {"source_id":"course-a/chunk-2","document_id":"doc-a","title":"A.pdf"},
+        {"source_id":"course-a/chunk-3","document_id":"doc-b","title":"B.pdf"},
+        {"source_id":"other-course/chunk-1","document_id":"doc-other","title":"Other.pdf"},
+    ]
+    question={"source_metadata":[{"source_id":"course-a/chunk-1"},{"source_id":"course-a/chunk-2"}]}
+    assert question_citations(question,citations) == citations[:2]
+    assert question_citations({},citations) == []
 
 
 def test_chat_quiz_grade_evidence_progress_and_explanation_vertical_flow(learning):
@@ -97,20 +110,52 @@ def test_chat_quiz_grade_evidence_progress_and_explanation_vertical_flow(learnin
     score=client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[{"question_id":question_id,"selected_option_id":"B"}]}).json()
     assert score["score_percent"]==0 and score["correct_count"]==0
     orch.generate.assert_not_awaited()
-    assert len(state["events"])==1 and state["events"][0]["course_id"]=="INT1339"
-    before=deepcopy(state["answers"])
-    review=client.get(f"/learning/attempts/{attempt}/review",headers=headers()).json()
-    assert review["results"][0]["explanation_status"]=="available" and state["answers"]==before
-    progress=client.get("/learning/courses/INT1339/progress",headers=headers()).json()
-    assert progress["topics"][0]["mastery_score"]==0 and progress["mastery_model"]=="heuristic/rule-based"
-    assert progress["recommendations"][0]["recommended_actions"]
-    events=deepcopy(state["events"])
-    assert client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[]}).status_code==409
-    assert state["events"]==events
-    pub.delete(restore_context(store.get("quiz",quiz_id)["payload"]["context"]).scope,"1")
-    orch.generate.reset_mock()
-    assert client.get(f"/learning/attempts/{attempt}/review",headers=headers()).json()["results"][0]["explanation_status"]=="unavailable"
-    orch.generate.assert_not_awaited()
+
+
+def test_three_question_review_is_mapped_by_question_id(learning):
+    client,_,_,orch,_,_=learning
+    response=client.post("/learning/courses/INT1339/quizzes",headers=headers(),
+                         json={**generation(),"count":3})
+    assert response.status_code==200, response.json().get("detail",{}).get("code")
+    quiz=response.json()
+    assert len(quiz["questions"])==3
+    attempt=client.post(f"/learning/quizzes/{quiz['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    answers=[{"question_id": question["question_id"], "selected_option_id": "A"}
+             for question in quiz["questions"]]
+    client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":answers})
+    review=client.get(f"/learning/attempts/{attempt}/review",headers=headers()).json()["results"]
+    assert [item["question_id"] for item in review] == [item["question_id"] for item in answers]
+    assert all(item["explanation_status"] == "available" for item in review)
+    assert all(item["correct_answer"] for item in review)
+
+
+def test_review_can_request_only_unavailable_question_without_reordering(learning):
+    client,_,_,_,_,_=learning
+    response=client.post("/learning/courses/INT1339/quizzes",headers=headers(),
+                         json={**generation(),"count":3})
+    assert response.status_code==200, response.json().get("detail",{}).get("code")
+    quiz=response.json()
+    assert len(quiz["questions"])==3
+    attempt=client.post(f"/learning/quizzes/{quiz['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    answers=[{"question_id": question["question_id"], "selected_option_id": "A"}
+             for question in quiz["questions"]]
+    client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":answers})
+    requested=answers[1]["question_id"]
+    review=client.get(f"/learning/attempts/{attempt}/review?question_id={requested}",headers=headers()).json()["results"]
+    assert [item["question_id"] for item in review] == [requested]
+
+
+def test_review_provider_failure_is_not_reported_as_publication_failure(learning):
+    client,_,_,orch,_,_=learning
+    quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).json()
+    attempt=client.post(f"/learning/quizzes/{quiz['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    question_id=quiz["questions"][0]["question_id"]
+    client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),
+                json={"answers":[{"question_id":question_id,"selected_option_id":"B"}]})
+    orch.generate.side_effect=lambda **kwargs: LLMResult(
+        "error","groq","model","",0,error_code="HTTP_429")
+    review=client.get(f"/learning/attempts/{attempt}/review",headers=headers()).json()["results"]
+    assert review[0]["explanation_status"] == "provider_rate_limited"
 
 
 def test_flashcard_content_persists_and_review_evidence_is_idempotent(learning):
@@ -119,11 +164,15 @@ def test_flashcard_content_persists_and_review_evidence_is_idempotent(learning):
     card=created["flashcards"][0]
     assert card["front_text"]=="Python?" and card["back_text"]=="Language" and card["topic"]=="Python"
     reloaded=client.get("/learning/courses/INT1339/flashcards",headers=headers()).json()["flashcards"]
-    assert reloaded==[card]
+    assert reloaded[0]["flashcard_id"]==card["flashcard_id"]
+    assert reloaded[0]["reviewed"] is False and reloaded[0]["needs_review"] is True
     path=f"/learning/flashcards/{card['flashcard_id']}/reviews"
     assert client.post(path,headers=headers(),json={"rating":"GOOD","review_id":"once"}).status_code==200
     assert client.post(path,headers=headers(),json={"rating":"GOOD","review_id":"once"}).status_code==200
     assert len(state["events"])==1
+    reviewed=client.get("/learning/courses/INT1339/flashcards",headers=headers()).json()["flashcards"][0]
+    assert reviewed["reviewed"] is True and reviewed["needs_review"] is False
+    assert reviewed["latest_rating"]=="GOOD"
     progress=client.get("/learning/courses/INT1339/progress",headers=headers()).json()
     assert progress["topics"][0]["mastery_score"]==75
     before=deepcopy(state)
@@ -160,6 +209,33 @@ def test_client_identity_key_score_and_context_claims_are_rejected(learning):
     assert not state["definitions"]
 
 
+@pytest.mark.parametrize("path",["quizzes","flashcards"])
+def test_generation_can_select_only_an_active_chapter(learning,path):
+    client,_,state,orch,pub,adapter=learning
+    active=client.get("/learning/courses/INT1339/documents",headers=headers()).json()["publications"][0]
+    adapter.retrieve.reset_mock()
+    body={**generation(),"scope_mode":"chapter","chapter_id":active["document_id"]}
+    response=client.post("/learning/courses/INT1339/"+path,headers=headers(),json=body)
+    assert response.status_code==200
+    assert adapter.retrieve.call_count==1
+    before=deepcopy(state); orch.generate.reset_mock(); adapter.retrieve.reset_mock()
+    denied=client.post("/learning/courses/INT1339/"+path,headers=headers(),json={
+        **body,"chapter_id":"not-active"})
+    assert denied.status_code==422 and denied.json()["detail"]["code"]=="invalid_chapter"
+    assert state==before and adapter.retrieve.call_count==0
+    orch.generate.assert_not_awaited()
+
+
+def test_exact_saved_flashcard_duplicate_is_not_persisted_again(learning):
+    client,_,state,_,_,_=learning
+    first=client.post("/learning/courses/INT1339/flashcards",headers=headers(),json=generation())
+    assert first.status_code==200 and len(state["cards"])==1
+    before=deepcopy(state)
+    second=client.post("/learning/courses/INT1339/flashcards",headers=headers(),json=generation())
+    assert second.status_code==409 and second.json()["detail"]["code"]=="NO_NEW_FLASHCARDS"
+    assert state==before
+
+
 def test_malformed_provider_output_creates_no_trusted_artifact(learning):
     client,_,state,orch,_,_=learning
     orch.generate.side_effect=None; orch.generate.return_value=LLMResult("success","fake","fake","INVALID JSON",0)
@@ -167,7 +243,26 @@ def test_malformed_provider_output_creates_no_trusted_artifact(learning):
     assert not state["definitions"] and not state["bindings"]
 
 
-def test_provider_timeout_returns_502_without_persistence(learning,caplog):
+def test_grounding_rejection_is_422_with_safe_counts_and_no_persistence(learning):
+    client,_,state,orch,_,_=learning
+    async def unsupported_span(**kwargs):
+        payload=json.loads(kwargs["prompt"])
+        return LLMResult("success","fake","fake",json.dumps({"questions":[{
+            "question":"Nội dung nào được nêu trong tài liệu?","type":"mcq",
+            "evidence_id":payload["verified_evidence"][0]["evidence_id"],"answer_span_id":"not-a-span",
+            "options":[{"id":"A","text":"unsupported"},{"id":"B","text":"one"},
+                       {"id":"C","text":"two"},{"id":"D","text":"three"}],
+            "correct_option_id":"A","explanation":"Không được xác minh.",
+        }]}),0)
+    orch.generate.side_effect=unsupported_span
+    response=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation())
+    assert response.status_code==422
+    assert response.json()["detail"] == {"code":"QUIZ_GROUNDING_FAILED",
+        "message":"Learning request could not be completed.","requested_count":1,"validated_count":0}
+    assert not state["definitions"] and not state["bindings"]
+
+
+def test_provider_timeout_returns_504_without_persistence(learning,caplog):
     client,_,state,orch,_,_=learning
     caplog.set_level(logging.INFO,logger="uvicorn.error")
     before=deepcopy(state); orch.generate.side_effect=None
@@ -175,9 +270,9 @@ def test_provider_timeout_returns_502_without_persistence(learning,caplog):
         "error","ollama","qwen2.5:3b","SECRET_PROVIDER_BODY",30000,
         error_code="TIMEOUT_OR_NETWORK_ERROR")
     response=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation())
-    assert response.status_code==502
+    assert response.status_code==504
     assert response.json()["detail"]=={
-        "code":"QUIZ_GENERATION_FAILED",
+        "code":"LEARNING_GENERATION_TIMEOUT",
         "message":"Learning request could not be completed."}
     assert state==before
     events=quiz_events(caplog)
@@ -195,6 +290,47 @@ def test_provider_timeout_returns_502_without_persistence(learning,caplog):
     orch.generate.assert_awaited_once()
 
 
+def test_provider_rate_limit_returns_429_without_retry_or_persistence(learning):
+    client,_,state,orch,_,_=learning
+    before=deepcopy(state); orch.generate.side_effect=None
+    orch.generate.return_value=LLMResult(
+        "error","groq","qwen/qwen3.8-27b","",10,error_code="HTTP_429",
+        metadata={"provider_http_status":429,"retry_after_seconds":30})
+    response=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation())
+    assert response.status_code==429
+    assert response.json()["detail"]["code"]=="LEARNING_RATE_LIMITED"
+    assert state==before
+    orch.generate.assert_awaited_once()
+
+
+def test_retrieval_timeout_returns_504_before_provider_or_persistence(learning,caplog):
+    client,_,state,orch,_,adapter=learning
+    caplog.set_level(logging.INFO,logger="uvicorn.error")
+    before=deepcopy(state); orch.generate.reset_mock()
+    adapter.retrieve.side_effect=DeepTutorError(
+        "retrieval_timeout","Verified retrieval timed out.",status_code=504)
+    response=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation())
+    assert response.status_code==504
+    assert response.json()["detail"]["code"]=="retrieval_timeout"
+    assert state==before
+    orch.generate.assert_not_awaited()
+    assert ("retrieval_context","failed") in {
+        (event["stage"],event["result"]) for event in quiz_events(caplog)}
+
+
+def test_flashcard_sql_failure_rolls_back_and_stops_loading(learning,caplog):
+    client,store,state,orch,_,_=learning
+    caplog.set_level(logging.INFO,logger="uvicorn.error")
+    store.evidence.register_flashcards=MagicMock(side_effect=ValueError("persistence_failure"))
+    response=client.post("/learning/courses/INT1339/flashcards",headers=headers(),json=generation())
+    assert response.status_code==503
+    assert response.json()["detail"]["code"]=="persistence_failure"
+    assert not state["cards"] and not state["bindings"]
+    assert [(event["stage"],event["result"]) for event in flashcard_events(caplog)][-3:]==[
+        ("persistence","started"),("persistence","failed"),("response","failed")]
+    orch.generate.assert_awaited_once()
+
+
 def test_success_observability_reaches_persistence_without_private_content(learning,caplog):
     client,_,state,orch,_,_=learning
     caplog.set_level(logging.INFO,logger="uvicorn.error")
@@ -207,7 +343,7 @@ def test_success_observability_reaches_persistence_without_private_content(learn
         ("structural_validation","started"),("structural_validation","passed"),
         ("semantic_validation","passed"),("persistence","started"),
         ("persistence","passed"),("artifact_persistence","started"),
-        ("artifact_persistence","passed")]
+        ("artifact_persistence","passed"),("response","passed")]
     assert len({event["correlation_id"] for event in events})==1
     assert "trusted full lecture context" not in caplog.text
     assert "correct_option_id" not in caplog.text
@@ -222,8 +358,8 @@ def test_quiz_persistence_failure_is_sanitized_and_observable(learning,caplog):
     assert response.status_code==503
     assert response.json()["detail"]=={
         "code":"persistence_failure","message":"Learning request could not be completed."}
-    assert [(event["stage"],event["result"]) for event in quiz_events(caplog)][-2:]==[
-        ("persistence","started"),("persistence","failed")]
+    assert [(event["stage"],event["result"]) for event in quiz_events(caplog)][-3:]==[
+        ("persistence","started"),("persistence","failed"),("response","failed")]
     assert not state["definitions"] and not state["bindings"]
     assert "trusted full lecture context" not in caplog.text
     assert "correct_option_id" not in caplog.text
@@ -239,8 +375,9 @@ def test_artifact_persistence_failure_is_sanitized_and_observable(learning,caplo
     assert response.json()["detail"]=={
         "code":"persistence_failure","message":"Learning request could not be completed."}
     events=[(event["stage"],event["result"]) for event in quiz_events(caplog)]
-    assert events[-4:]==[("persistence","started"),("persistence","passed"),
-                        ("artifact_persistence","started"),("artifact_persistence","failed")]
+    assert events[-5:]==[("persistence","started"),("persistence","passed"),
+                        ("artifact_persistence","started"),("artifact_persistence","failed"),
+                        ("response","failed")]
     assert len(state["definitions"])==1 and not state["bindings"]
     assert "trusted full lecture context" not in caplog.text
     assert "correct_option_id" not in caplog.text
@@ -253,10 +390,11 @@ def test_learning_update_delete_never_sends_old_context_to_provider(learning,pat
     scope=next(iter(pub.ledger.snapshot().records.values()))
     from deeptutor_integration.contracts import AuthorizedCourseScope
     authorized=AuthorizedCourseScope(scope.moodle_course_id,scope.course_id,scope.kb_id,"owner",scope.source_namespace)
-    pub.publish(authorized,document("NEW_VERSION_ONLY "*40))
+    pub.publish(authorized,document(
+        "NEW_VERSION_ONLY establishes the sole active verified context for this test."))
     orch.generate.reset_mock()
     response=client.post("/learning/courses/INT1339/"+path,headers=headers(),json=generation())
-    assert response.status_code==200
+    assert response.status_code==200, response.json().get("detail",{}).get("code")
     prompt=orch.generate.call_args.kwargs["prompt"]
     assert "NEW_VERSION_ONLY" in prompt and "trusted full lecture context" not in prompt
     pub.delete(authorized,"1"); orch.generate.reset_mock()

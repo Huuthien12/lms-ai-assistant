@@ -29,11 +29,18 @@ class VerifiedLearningRepository:
             conn.commit()
 
     def put(self, kind, identifier, scope, payload):
-        encoded=json.dumps(payload,ensure_ascii=False,allow_nan=False)
+        self.put_many(kind,[(identifier,payload)],scope)
+
+    def put_many(self, kind, items, scope):
+        encoded=[(identifier,json.dumps(payload,ensure_ascii=False,allow_nan=False))
+                 for identifier,payload in items]
+        if not encoded: raise ValueError("persistence_failure")
         with self.connect() as conn:
             try:
-                conn.cursor().execute("INSERT INTO dbo.VerifiedLearningArtifacts (artifact_type,artifact_id,owner_ref,course_id,payload_json) VALUES (?,?,?,?,?)",
-                    kind,identifier,scope.owner_ref,scope.course_key,encoded)
+                cursor=conn.cursor()
+                for identifier,payload in encoded:
+                    cursor.execute("INSERT INTO dbo.VerifiedLearningArtifacts (artifact_type,artifact_id,owner_ref,course_id,payload_json) VALUES (?,?,?,?,?)",
+                        kind,identifier,scope.owner_ref,scope.course_key,payload)
                 conn.commit()
             except Exception:
                 conn.rollback(); raise ValueError("persistence_failure") from None

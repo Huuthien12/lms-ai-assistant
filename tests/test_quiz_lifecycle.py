@@ -106,6 +106,15 @@ def test_trusted_definition_and_recursive_public_contract():
     walk(public)
 
 
+def test_trusted_definition_retains_only_question_source_ids_for_review_mapping():
+    trusted = _trusted_questions([{**QUESTIONS[0], "source_metadata": [
+        {"source_id": "verified-source", "document_id": "document-a", "title": "private.pdf"},
+        {"source_id": 4},
+    ]}])
+    assert trusted[0]["source_metadata"] == [{"source_id": "verified-source"}]
+    assert "source_metadata" not in QuizService.to_public_result({"questions": trusted})["questions"][0]
+
+
 def test_start_is_idempotent_and_enforces_course_and_quiz():
     _, repo = state_repo(); stored_quiz(repo)
     request = StartAttemptRequest(quiz_id="quiz-1", course_id="course-1", student_id="student-1")
@@ -229,6 +238,10 @@ class EvidenceCursor:
             s["cards"][values[0]] = (values[1], values[2], values[4])
         elif sql.startswith("SELECT student_id, flashcard_id, rating FROM dbo.FlashcardReviews"):
             review = s["reviews"].get(values[0]); self.result = Row((review[0], review[1], review[2])) if review else None
+        elif sql.startswith("SELECT TOP 1 rating, reviewed_at FROM dbo.FlashcardReviews"):
+            reviews=[review for review in s["reviews"].values()
+                     if review[1]==values[0] and review[0]==values[1]]
+            self.result=Row((reviews[-1][2],reviews[-1][3])) if reviews else None
         elif sql.startswith("INSERT INTO dbo.FlashcardReviews"):
             if s.get("fail_review"): raise RuntimeError("review failure")
             s["reviews"][values[0]] = values[1:]
@@ -266,6 +279,9 @@ def test_flashcard_registry_review_idempotency_and_server_scope():
     assert state["events"] == [{"student_id": "student-1", "course_id": "course-1", "topic": "topic-1", "type": "flashcard", "correct": None, "rating": "GOOD"}]
     assert repo.review("card-1", FlashcardReviewRequest(student_id="student-1", rating="GOOD", review_id="review-1"), scope=SCOPE)["status"] == "RECORDED"
     assert len(state["reviews"]) == len(state["events"]) == 1
+    status=repo.latest_review("card-1",SCOPE)
+    assert status["reviewed"] is True and status["needs_review"] is False
+    assert status["latest_rating"]=="GOOD" and status["review_schedule_supported"] is False
     with pytest.raises(ValueError, match="learning_scope_forbidden"):
         repo.review("card-1", FlashcardReviewRequest(student_id="student-2", rating="GOOD", review_id="review-1"), scope=SCOPE)
     with pytest.raises(ValueError, match="idempotency_conflict"):

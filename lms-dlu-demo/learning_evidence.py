@@ -131,6 +131,17 @@ class LearningEvidenceRepository:
         scope.require(card.owner_id, row[0])
         return card.model_dump()
 
+    def latest_review(self, flashcard_id: str, scope: LearningScope) -> dict[str, Any]:
+        self.flashcard(flashcard_id,scope)
+        with self.connect() as conn:
+            row=conn.cursor().execute(
+                "SELECT TOP 1 rating, reviewed_at FROM dbo.FlashcardReviews "
+                "WHERE flashcard_id=? AND student_id=? ORDER BY reviewed_at DESC",
+                flashcard_id,scope.owner_id).fetchone()
+        return {"reviewed":row is not None,"latest_rating":row[0] if row else None,
+                "last_reviewed_at":row[1].isoformat() if row and hasattr(row[1],"isoformat") else (str(row[1]) if row else None),
+                "needs_review":row is None,"review_schedule_supported":False}
+
     def review(self, flashcard_id: str, request: FlashcardReviewRequest, *, scope: LearningScope) -> dict[str, Any]:
         scope.require(request.student_id, scope.course_id)
         if request.rating not in ("AGAIN", "HARD", "GOOD", "EASY") or not isinstance(request.student_id, str) or not request.student_id.strip() or not isinstance(request.review_id, str) or not request.review_id.strip():

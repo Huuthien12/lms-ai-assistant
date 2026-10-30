@@ -4,6 +4,7 @@ from hashlib import sha256
 from uuid import uuid4
 from pathlib import Path
 import logging
+import time
 
 logger=logging.getLogger(__name__)
 from .contracts import DocumentInput
@@ -85,14 +86,24 @@ class VerifiedPublicationService:
                 for r in active_records(self.ledger.snapshot(),scope)]
 
     @contextmanager
-    def context(self, scope, question):
+    def context(self, scope, question, *, deadline=None, document_id=None):
         # Hold the existing OS ledger lock through the consumer's provider call.
         # Successful update/delete cannot retire a source while a prompt uses it.
         with self.ledger._locked():
             records=active_records(self.ledger._state(),scope)
+            if document_id is not None:
+                records=[record for record in records if record.document_id==document_id]
+                if not records:
+                    raise DeepTutorError("invalid_chapter","The selected chapter is not an active publication.",status_code=422)
             chunks=[]
             for record in records:
-                try: raw=self.adapter.retrieve(record.provider_publication_ref,question)
+                remaining=None if deadline is None else deadline-time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    raise DeepTutorError("retrieval_timeout","Verified retrieval timed out.",status_code=504)
+                try:
+                    raw=(self.adapter.retrieve(record.provider_publication_ref,question)
+                         if remaining is None else self.adapter.retrieve(
+                             record.provider_publication_ref,question,timeout_seconds=remaining))
                 except DeepTutorError: raise
                 except Exception:
                     raise DeepTutorError("raw_retrieval_unavailable","Full-source retrieval could not be completed.",status_code=502) from None

@@ -1,4 +1,5 @@
 import os
+import re
 from typing import Any, Protocol
 
 import httpx
@@ -30,7 +31,7 @@ class RealDeepTutorClient:
         self._personal_token = personal_token
         self.service_token = service_token if service_token is not None else os.getenv("LMS_MOODLE_DISCOVERY_TOKEN")
 
-    def request(self, method: str, path: str, payload=None) -> dict[str, Any]:
+    def request(self, method: str, path: str, payload=None, timeout_seconds: float = 180) -> dict[str, Any]:
         from urllib.parse import urlsplit
         try:
             origin=urlsplit(self.base_url)
@@ -43,13 +44,25 @@ class RealDeepTutorClient:
             raise BackendRequestError(401 if not self._personal_token else 503)
         try:
             response=httpx.request(method,self.base_url+path,json=payload,
-                headers={"Authorization":"Bearer "+self._personal_token},timeout=180,follow_redirects=False)
+                headers={"Authorization":"Bearer "+self._personal_token},timeout=timeout_seconds,follow_redirects=False)
             if response.status_code!=200:
-                raise BackendRequestError(response.status_code if response.status_code in (401,403,404,409,422,502,503) else 503)
+                code=None
+                safe_details={}
+                try:
+                    detail=response.json().get("detail",{})
+                    candidate=detail.get("code") if isinstance(detail,dict) else None
+                    if isinstance(candidate,str) and re.fullmatch(r"[A-Za-z0-9_]{1,64}",candidate): code=candidate
+                    if isinstance(detail,dict):
+                        for key in ("requested_count","validated_count"):
+                            value=detail.get(key)
+                            if type(value) is int and value >= 0: safe_details[key]=value
+                except (ValueError,TypeError): pass
+                raise BackendRequestError(response.status_code if response.status_code in (401,403,404,409,413,422,502,503,504) else 503,code,safe_details)
             result=response.json()
             if not isinstance(result,dict): raise BackendRequestError(502)
             return result
         except BackendRequestError: raise
+        except httpx.TimeoutException: raise BackendRequestError(504,"CLIENT_TIMEOUT") from None
         except (httpx.HTTPError,ValueError): raise BackendRequestError(503) from None
 
     def identity(self): return self.request("GET","/auth/me")
@@ -86,6 +99,7 @@ def create_deeptutor_client() -> DeepTutorAPIClient:
 
 
 class BackendRequestError(RuntimeError):
-    def __init__(self,status_code):
-        self.status_code=status_code
+    def __init__(self,status_code,code=None,details=None):
+        self.status_code,self.code=status_code,code
+        self.details=details if isinstance(details,dict) else {}
         super().__init__(f"Backend request failed ({status_code}).")

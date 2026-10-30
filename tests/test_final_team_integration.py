@@ -141,7 +141,8 @@ def test_actual_validator_rejects_revocation_before_persistence(team,operation):
     assert result.status_code==403 and state==before and orch.generate.await_count==1
 
 
-def test_real_receipt_validator_rejects_shape_only_and_expired_context(team):
+@pytest.mark.asyncio
+async def test_real_receipt_validator_rejects_shape_only_and_expired_context(team):
     _,store,_,orch,pub,_,_,auth=team
     request=Request({"type":"http","headers":[(b"authorization",b"Bearer A")]})
     access=auth(request); scope=access.scope("INT1339")
@@ -150,9 +151,11 @@ def test_real_receipt_validator_rejects_shape_only_and_expired_context(team):
     with pub.context(scope,"Python") as context:
         learning=pub.learning_context(context)
         forged=learning.model_copy(update={"text":"forged text"})
-        with pytest.raises(ValueError,match="learning_context_rejected"): service._context(learning.scope,forged)
+        with pytest.raises(ValueError,match="learning_context_rejected"):
+            await service._context(learning.scope,forged)
         assert pub.validate_learning_context(learning.scope,learning,access) is True
-    with pytest.raises(ValueError,match="learning_context_rejected"): service._context(learning.scope,learning)
+    with pytest.raises(ValueError,match="learning_context_rejected"):
+        await service._context(learning.scope,learning)
     orch.generate.assert_not_awaited()
 
 

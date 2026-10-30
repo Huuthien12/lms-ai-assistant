@@ -1,15 +1,16 @@
 """One verified application flow into Quan's existing learning domains."""
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+import os
 import time
 from typing import Literal
 from uuid import uuid4
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from fastapi.routing import APIRoute
 from fastapi.exceptions import RequestValidationError
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from backend.services.ai.quiz_service import QuizService, record_quiz_stage
+from backend.services.ai.quiz_service import QuizService, record_generation_stage, record_quiz_stage
 from backend.services.ai.flashcard_service import FlashcardService
 from backend.services.ai.explanation_service import ExplanationService
 from backend.services.ai.grading_service import GradingService
@@ -31,9 +32,14 @@ class SafeLearningRoute(APIRoute):
     def get_route_handler(self):
         handler=super().get_route_handler()
         async def safe(request):
-            if request.method == "POST" and request.url.path.endswith("/quizzes"):
-                request.state.quiz_correlation_id = uuid4().hex
-                request.state.quiz_started_at = time.monotonic()
+            kind=None
+            if request.method == "POST":
+                kind=("quiz" if request.url.path.endswith("/quizzes") else
+                      "flashcard" if request.url.path.endswith("/flashcards") else None)
+            if kind:
+                request.state.learning_kind=kind
+                request.state.learning_correlation_id=uuid4().hex
+                request.state.learning_started_at=time.monotonic()
             try: return await handler(request)
             except HTTPException: raise
             except AuthContractError as error: raise HTTPException(error.status_code,detail=error.public_payload()) from None
@@ -42,20 +48,42 @@ class SafeLearningRoute(APIRoute):
             except DeepTutorError as error: raise HTTPException(error.status_code,detail=error.as_dict()) from None
             except ValueError as error:
                 code=str(error).split(":",1)[0]
+                diagnostics=getattr(error,"diagnostics",{})
+                if code=="INVALID_QUIZ_SCHEMA" and isinstance(diagnostics,dict):
+                    reason=diagnostics.get("grounding_failure_reason")
+                    if reason=="answer_span_mismatch": code="QUIZ_ANSWER_SPAN_MISMATCH"
+                    elif reason: code="QUIZ_GROUNDING_FAILED"
                 known={"artifact_not_found":404,"attempt_not_found":404,"quiz_not_found":404,
                        "already_submitted":409,"invalid_question":422,"invalid_option":422,"course_mismatch":403,
                        "idempotency_conflict":409,"learning_scope_forbidden":403,"flashcard_conflict":409,"flashcard_context_unavailable":409,
                        "learning_context_verifier_not_configured":503,"learning_context_rejected":409,"INVALID_LEARNING_CONTEXT":422,"persistence_failure":503,"mastery_not_found":404,
                        "INSUFFICIENT_GROUNDED_CONTEXT":409,"QUIZ_GENERATION_FAILED":502,
-                       "FLASHCARD_GENERATION_FAILED":502,"INVALID_QUIZ_SCHEMA":502,"INVALID_FLASHCARD_SCHEMA":502}
+                       "FLASHCARD_GENERATION_FAILED":502,"INVALID_QUIZ_SCHEMA":502,"INVALID_FLASHCARD_SCHEMA":502,
+                       "QUIZ_GROUNDING_FAILED":422,"QUIZ_ANSWER_SPAN_MISMATCH":422,
+                       "LEARNING_GENERATION_TIMEOUT":504,"LEARNING_PROVIDER_UNCONFIGURED":503,
+                        "LEARNING_PROVIDER_UNAVAILABLE":503,"LEARNING_PROVIDER_REQUEST_TOO_LARGE":413,
+                       "LEARNING_RATE_LIMITED":429,"invalid_chapter":422,"NO_NEW_FLASHCARDS":409}
                 status=known.get(code,503)
                 if code not in known: code="learning_dependency_unavailable"
-                raise HTTPException(status,detail={"code":code,"message":"Learning request could not be completed."}) from None
+                detail={"code":code,"message":"Learning request could not be completed."}
+                if code in {"QUIZ_GROUNDING_FAILED","QUIZ_ANSWER_SPAN_MISMATCH"}:
+                    for key in ("requested_count","validated_count"):
+                        value=diagnostics.get(key) if isinstance(diagnostics,dict) else None
+                        if type(value) is int and value >= 0:
+                            detail[key]=value
+                raise HTTPException(status,detail=detail) from None
             except Exception:
                 raise HTTPException(503,detail={"code":"learning_dependency_unavailable","message":"Learning dependency is unavailable."}) from None
             finally:
-                if hasattr(request.state,"quiz_started_at") and not getattr(request.state,"quiz_authorization_recorded",False):
-                    record_quiz_stage(request.state.quiz_correlation_id,"authorization_pre_generation","failed",(time.monotonic()-request.state.quiz_started_at)*1000)
+                if kind:
+                    correlation_id=request.state.learning_correlation_id
+                    started=request.state.learning_started_at
+                    if not getattr(request.state,"learning_authorization_recorded",False):
+                        record_generation_stage(kind,correlation_id,
+                            "authorization_pre_generation" if kind=="quiz" else "authorization",
+                            "failed",(time.monotonic()-started)*1000)
+                    if not getattr(request.state,"learning_response_recorded",False):
+                        record_generation_stage(kind,correlation_id,"response","failed",(time.monotonic()-started)*1000)
         return safe
 
 
@@ -76,12 +104,27 @@ class GenerationInput(ChatInput):
     topic: str=Field(min_length=1,max_length=256)
     count: int=Field(default=3,ge=1,le=20,strict=True)
     difficulty: Literal["easy","medium","hard","mixed"]="medium"
+    scope_mode: Literal["course","chapter"]="course"
+    chapter_id: str | None=Field(default=None,min_length=1,max_length=200)
     @field_validator("topic")
     @classmethod
     def topic_nonblank(cls,value):
         value=value.strip()
         if not value: raise ValueError("Topic must not be blank.")
         return value
+
+    @field_validator("chapter_id")
+    @classmethod
+    def chapter_nonblank(cls,value):
+        return value.strip() if value is not None else value
+
+    @property
+    def selected_document_id(self):
+        if self.scope_mode=="chapter":
+            if not self.chapter_id: raise ValueError("invalid_chapter")
+            return self.chapter_id
+        if self.chapter_id is not None: raise ValueError("invalid_chapter")
+        return None
 
 
 class SubmissionInput(BaseModel):
@@ -96,8 +139,10 @@ class ReviewInput(BaseModel):
 
 
 @asynccontextmanager
-async def learning_context(publications,scope,question):
-    lease=publications.context(scope,question)
+async def learning_context(publications,scope,question,*,deadline=None,document_id=None):
+    kwargs={"deadline":deadline}
+    if document_id is not None: kwargs["document_id"]=document_id
+    lease=publications.context(scope,question,**kwargs)
     context=await run_in_threadpool(lease.__enter__)
     try:
         if not context.chunks: raise DeepTutorError("no_verified_context","No verified active context is available.",status_code=409)
@@ -106,19 +151,41 @@ async def learning_context(publications,scope,question):
     finally: await run_in_threadpool(lease.__exit__,None,None,None)
 
 
-def public_quiz(quiz,context):
+def public_quiz(quiz,context,display_scope=None):
     public=QuizService.to_public_result({"questions":quiz["questions"]})
     for original,item in zip(quiz["questions"],public["questions"]): item["question_id"]=original["question_id"]
-    return {"quiz_id":quiz["quiz_id"],"course_id":quiz["course_id"],"topic":quiz["topic"],
+    result={"quiz_id":quiz["quiz_id"],"course_id":quiz["course_id"],"topic":quiz["topic"],
             **public,"context_id":context.context_id,"sources":VerifiedPublicationService.learning_context(context).source_metadata()}
+    if isinstance(display_scope,dict) and display_scope.get("scope_mode") in {"chapter","course"}:
+        result["scope_mode"]=display_scope["scope_mode"]
+        if isinstance(display_scope.get("chapter_id"),str): result["chapter_id"]=display_scope["chapter_id"]
+    return result
 
 
-def create_verified_learning_router(authorizer,publications,repository,orchestrator,chat_service,recommendations):
+def question_citations(question,citations):
+    """Select only citations whose stable source ID was retained with this question."""
+    question_metadata=question.get("source_metadata",[]) if isinstance(question,dict) else []
+    if isinstance(question_metadata,dict): question_metadata=[question_metadata]
+    source_ids={source.get("source_id") for source in question_metadata
+                if isinstance(source,dict) and isinstance(source.get("source_id"),str)}
+    return [source for source in citations
+            if isinstance(source,dict) and source.get("source_id") in source_ids]
+
+
+def create_verified_learning_router(authorizer,publications,repository,orchestrator,chat_service,recommendations,
+                                    *,request_timeout_seconds=None,retrieval_timeout_seconds=None,
+                                    persistence_reserve_seconds=None):
     router=APIRouter(prefix="/learning",tags=["verified-learning"],route_class=SafeLearningRoute)
     quizzes=QuizService(orchestrator); cards=FlashcardService(orchestrator); explanations=ExplanationService(orchestrator)
     grader=GradingService(); moodle=MoodlePublicationAdapter(publications)
+    request_timeout=float(request_timeout_seconds or os.getenv("LEARNING_REQUEST_TIMEOUT_SECONDS","150"))
+    retrieval_timeout=float(retrieval_timeout_seconds or os.getenv("LEARNING_RETRIEVAL_TIMEOUT_SECONDS","60"))
+    persistence_reserve=float(persistence_reserve_seconds or os.getenv("LEARNING_PERSISTENCE_RESERVE_SECONDS","20"))
+    if min(request_timeout,retrieval_timeout,persistence_reserve)<=0 or retrieval_timeout+persistence_reserve>=request_timeout:
+        raise ValueError("Invalid learning timeout configuration")
 
-    async def generate_with_authority(access,context,kind,request,correlation_id=None):
+    async def generate_with_authority(access,context,kind,request,correlation_id,deadline,timeout_seconds,
+                                      existing_pairs=None):
         failures=[]
         def validate(scope,learning):
             try: return publications.validate_learning_context(scope,learning,access)
@@ -128,13 +195,26 @@ def create_verified_learning_router(authorizer,publications,repository,orchestra
         learning=publications.learning_context(context)
         try:
             if kind=="quiz":
-                return await generation.generate_quiz(learning.scope,learning,topic=request.topic,question_count=request.count,difficulty=request.difficulty,correlation_id=correlation_id)
-            return await generation.generate_flashcards(learning.scope,learning,topic=request.topic,count=request.count,difficulty=request.difficulty)
+                return await generation.generate_quiz(learning.scope,learning,topic=request.topic,
+                    question_count=request.count,difficulty=request.difficulty,correlation_id=correlation_id,
+                    deadline=deadline,timeout_seconds=timeout_seconds)
+            return await generation.generate_flashcards(learning.scope,learning,topic=request.topic,
+                count=request.count,difficulty=request.difficulty,correlation_id=correlation_id,
+                deadline=deadline,timeout_seconds=timeout_seconds,existing_pairs=existing_pairs)
         except ValueError:
             if failures: raise failures[-1]
             raise
 
     def learning_scope(scope): return LearningScope(owner_id=scope.owner_ref,course_id=scope.course_key)
+
+    def saved_flashcard_pairs(scope):
+        # shortcut: concurrent generation can race without a normalized DB key, add one in a future additive migration.
+        pairs=set()
+        for item in repository.list("flashcard",scope):
+            card=repository.evidence.flashcard(item["artifact_id"],learning_scope(scope))
+            pairs.add((" ".join(card["front_text"].casefold().split()),
+                       " ".join(card["back_text"].casefold().split())))
+        return pairs
 
     async def owned(kind,identifier,access):
         artifact=await run_in_threadpool(repository.get,kind,identifier)
@@ -194,27 +274,41 @@ def create_verified_learning_router(authorizer,publications,repository,orchestra
 
     @router.post("/courses/{course_id}/quizzes")
     async def generate_quiz(course_id:str,request:GenerationInput,http_request:Request,access=Depends(authorizer)):
-        correlation_id=getattr(http_request.state,"quiz_correlation_id",uuid4().hex)
-        request_started=getattr(http_request.state,"quiz_started_at",time.monotonic())
+        correlation_id=getattr(http_request.state,"learning_correlation_id",uuid4().hex)
+        request_started=getattr(http_request.state,"learning_started_at",time.monotonic())
+        deadline=request_started+request_timeout
         scope=await run_in_threadpool(access.scope,course_id,request.kb_name)
         record_quiz_stage(correlation_id,"authorization_pre_generation","passed",(time.monotonic()-request_started)*1000)
-        http_request.state.quiz_authorization_recorded=True
+        http_request.state.learning_authorization_recorded=True
         retrieval_started=time.monotonic(); retrieval_finished=False
         try:
-            async with learning_context(publications,scope,request.question) as context:
+            async with learning_context(publications,scope,request.question,
+                                        document_id=request.selected_document_id,
+                                        deadline=min(deadline-persistence_reserve,retrieval_started+retrieval_timeout)) as context:
                 record_quiz_stage(correlation_id,"retrieval_context","passed",(time.monotonic()-retrieval_started)*1000)
                 retrieval_finished=True
-                generated=await generate_with_authority(access,context,"quiz",request,correlation_id)
+                provider_timeout=deadline-time.monotonic()-persistence_reserve
+                if provider_timeout<=0: raise ValueError("LEARNING_GENERATION_TIMEOUT")
+                generated=await generate_with_authority(access,context,"quiz",request,correlation_id,deadline,provider_timeout)
                 artifact_started=time.monotonic()
                 record_quiz_stage(correlation_id,"artifact_persistence","started",0)
                 try:
-                    await run_in_threadpool(repository.put,"quiz",generated["quiz_id"],scope,{"context":context_payload(context)})
+                    await run_in_threadpool(repository.put,"quiz",generated["quiz_id"],scope,{
+                        "context":context_payload(context),
+                        "quiz_display":{"scope_mode":request.scope_mode,"chapter_id":request.selected_document_id},
+                    })
                 except Exception:
                     record_quiz_stage(correlation_id,"artifact_persistence","failed",(time.monotonic()-artifact_started)*1000)
                     raise
                 record_quiz_stage(correlation_id,"artifact_persistence","passed",(time.monotonic()-artifact_started)*1000)
                 # Public projection comes from Quan, with stable IDs and no raw context.
-                return {**generated,"topic":request.topic,"context_id":context.context_id,"sources":publications.learning_context(context).source_metadata()}
+                result={**generated,"topic":request.topic,"context_id":context.context_id,
+                        "scope_mode":request.scope_mode,
+                        "sources":publications.learning_context(context).source_metadata()}
+                if request.selected_document_id is not None: result["chapter_id"]=request.selected_document_id
+                record_quiz_stage(correlation_id,"response","passed",(time.monotonic()-request_started)*1000)
+                http_request.state.learning_response_recorded=True
+                return result
         except Exception:
             if not retrieval_finished:
                 record_quiz_stage(correlation_id,"retrieval_context","failed",(time.monotonic()-retrieval_started)*1000)
@@ -222,9 +316,9 @@ def create_verified_learning_router(authorizer,publications,repository,orchestra
 
     @router.get("/quizzes/{quiz_id}")
     async def quiz(quiz_id:str,access=Depends(authorizer)):
-        _,_,context=await owned("quiz",quiz_id,access)
+        artifact,_,context=await owned("quiz",quiz_id,access)
         quiz=await run_in_threadpool(repository.quizzes.quiz,quiz_id)
-        return public_quiz(quiz,context)
+        return public_quiz(quiz,context,artifact["payload"].get("quiz_display"))
 
     @router.post("/quizzes/{quiz_id}/attempts")
     async def start(quiz_id:str,access=Depends(authorizer)):
@@ -238,11 +332,14 @@ def create_verified_learning_router(authorizer,publications,repository,orchestra
         return await run_in_threadpool(repository.quizzes.submit,attempt_id,[a.model_dump() for a in request.answers],grader,scope=learning_scope(scope))
 
     @router.get("/attempts/{attempt_id}/review")
-    async def review(attempt_id:str,access=Depends(authorizer)):
+    async def review(attempt_id:str,question_id:list[str] | None=Query(default=None),access=Depends(authorizer)):
         attempt,scope,context=await owned_attempt(attempt_id,access)
         if attempt["status"]!="SUBMITTED": raise HTTPException(409,detail={"code":"attempt_not_submitted","message":"Attempt is not submitted."})
         quiz=await run_in_threadpool(repository.quizzes.quiz,attempt["quiz_id"])
         answers=await run_in_threadpool(repository.answers,attempt_id)
+        if question_id is not None:
+            requested=set(question_id)
+            answers=[answer for answer in answers if answer["question_id"] in requested]
         results=[]
         lease=publications.ledger._locked(); await run_in_threadpool(lease.__enter__)
         try:
@@ -251,29 +348,73 @@ def create_verified_learning_router(authorizer,publications,repository,orchestra
                 publications.revalidate(context); active=True
             except DeepTutorError: active=False
             for answer in answers:
-                item={**answer,"explanation_status":"unavailable"}
+                item={**answer,"explanation_status":"publication_unavailable" if not active else "provider_unavailable"}
                 if active:
-                    question=next(q for q in quiz["questions"] if q["question_id"]==answer["question_id"])
+                    question=next((q for q in quiz["questions"] if q["question_id"]==answer["question_id"]),None)
+                    if question is None:
+                        item["explanation_status"]="question_unavailable"
+                        results.append(item)
+                        continue
                     options={o["id"]:o["text"] for o in question["options"]}
+                    item["correct_option_id"]=question["correct_option_id"]
+                    item["correct_answer"]=options[question["correct_option_id"]]
+                    question_sources=question_citations(question,context.citations())
                     try:
                         explanation=await explanations.generate_explanation(question["question"],
                             options.get(answer["selected_option_id"]),options[question["correct_option_id"]],
-                            context=context.text(),source_metadata=context.citations())
+                            answer_state=("unanswered" if answer["selected_option_id"] is None
+                                          else "correct" if answer.get("correct") else "incorrect"),
+                            context=context.text(),source_metadata=question_sources)
                         item.update(explanation_status="available",explanation=explanation["explanation"],
                                     key_concept=explanation["key_concept"],sources=explanation["sources"])
-                    except ValueError: pass
+                    except ValueError as error:
+                        code=str(error).split(":",1)[0]
+                        item["explanation_status"]={
+                            "LEARNING_RATE_LIMITED":"provider_rate_limited",
+                            "LEARNING_PROVIDER_UNAVAILABLE":"provider_unavailable",
+                            "LEARNING_GENERATION_TIMEOUT":"provider_timeout",
+                        }.get(code,"provider_unavailable")
                 results.append(item)
         finally: await run_in_threadpool(lease.__exit__,None,None,None)
         return {"attempt_id":attempt_id,"results":results}
 
     @router.post("/courses/{course_id}/flashcards")
-    async def generate_cards(course_id:str,request:GenerationInput,access=Depends(authorizer)):
+    async def generate_cards(course_id:str,request:GenerationInput,http_request:Request,access=Depends(authorizer)):
+        correlation_id=getattr(http_request.state,"learning_correlation_id",uuid4().hex)
+        request_started=getattr(http_request.state,"learning_started_at",time.monotonic())
+        deadline=request_started+request_timeout
         scope=await run_in_threadpool(access.scope,course_id,request.kb_name)
-        async with learning_context(publications,scope,request.question) as context:
-            generated=await generate_with_authority(access,context,"flashcard",request)
-            for card in generated["flashcards"]:
-                await run_in_threadpool(repository.put,"flashcard",card["flashcard_id"],scope,{"context":context_payload(context)})
-            return {**generated,"sources":context.citations(),"context_id":context.context_id}
+        record_generation_stage("flashcard",correlation_id,"authorization","passed",(time.monotonic()-request_started)*1000)
+        http_request.state.learning_authorization_recorded=True
+        retrieval_started=time.monotonic(); retrieval_finished=False
+        try:
+            async with learning_context(publications,scope,request.question,
+                                        document_id=request.selected_document_id,
+                                        deadline=min(deadline-persistence_reserve,retrieval_started+retrieval_timeout)) as context:
+                record_generation_stage("flashcard",correlation_id,"retrieval","passed",(time.monotonic()-retrieval_started)*1000)
+                retrieval_finished=True
+                provider_timeout=deadline-time.monotonic()-persistence_reserve
+                if provider_timeout<=0: raise ValueError("LEARNING_GENERATION_TIMEOUT")
+                existing_pairs=await run_in_threadpool(saved_flashcard_pairs,scope)
+                generated=await generate_with_authority(access,context,"flashcard",request,correlation_id,
+                    deadline,provider_timeout,existing_pairs)
+                artifact_started=time.monotonic()
+                record_generation_stage("flashcard",correlation_id,"artifact_persistence","started",0)
+                try:
+                    await run_in_threadpool(repository.put_many,"flashcard",
+                        [(card["flashcard_id"],{"context":context_payload(context)}) for card in generated["flashcards"]],scope)
+                except Exception:
+                    record_generation_stage("flashcard",correlation_id,"artifact_persistence","failed",(time.monotonic()-artifact_started)*1000)
+                    raise
+                record_generation_stage("flashcard",correlation_id,"artifact_persistence","passed",(time.monotonic()-artifact_started)*1000)
+                result={**generated,"sources":context.citations(),"context_id":context.context_id}
+                record_generation_stage("flashcard",correlation_id,"response","passed",(time.monotonic()-request_started)*1000)
+                http_request.state.learning_response_recorded=True
+                return result
+        except Exception:
+            if not retrieval_finished:
+                record_generation_stage("flashcard",correlation_id,"retrieval","failed",(time.monotonic()-retrieval_started)*1000)
+            raise
 
     @router.get("/courses/{course_id}/flashcards")
     def list_cards(course_id:str,access=Depends(authorizer)):
@@ -283,6 +424,7 @@ def create_verified_learning_router(authorizer,publications,repository,orchestra
             card=repository.evidence.flashcard(item["artifact_id"],learning_scope(scope))
             result.append({key:card[key] for key in ("flashcard_id","front_text","back_text","topic")})
             result[-1]["sources"]=card["learning_context"]["sources"] if card.get("learning_context") else []
+            result[-1].update(repository.evidence.latest_review(item["artifact_id"],learning_scope(scope)))
         return {"flashcards":result}
 
     @router.post("/flashcards/{flashcard_id}/reviews")

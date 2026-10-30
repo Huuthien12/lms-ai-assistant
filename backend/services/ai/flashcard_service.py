@@ -1,9 +1,13 @@
 import json
+import time
+from uuid import uuid4
 from copy import deepcopy
 from typing import Any, Dict, Optional
 
 from backend.services.ai.orchestrator import AIOrchestrator
-from backend.services.ai.provider_base import LLMResult
+from backend.services.ai.provider_base import LLMResult, safe_result
+from backend.services.ai.quiz_service import (OutputSchemaError, provider_log_fields,
+    record_generation_stage, schema_log_fields)
 
 
 class FlashcardService:
@@ -52,33 +56,45 @@ class FlashcardService:
                     cleaned = cleaned[:-3]
                 data = json.loads(cleaned.strip())
         except (ValueError, TypeError, AttributeError):
-            raise ValueError("INVALID_FLASHCARD_SCHEMA") from None
+            raise OutputSchemaError("INVALID_FLASHCARD_SCHEMA",category="json_parse",
+                                    field="root") from None
 
         if not isinstance(data, dict):
-            raise ValueError("INVALID_FLASHCARD_SCHEMA")
+            raise OutputSchemaError("INVALID_FLASHCARD_SCHEMA",category="type",field="root")
         cards = data.get("flashcards")
-        if not isinstance(cards, list) or not 1 <= len(cards) <= 50:
-            raise ValueError("INVALID_FLASHCARD_SCHEMA")
+        if not isinstance(cards, list):
+            raise OutputSchemaError("INVALID_FLASHCARD_SCHEMA",category="missing_or_type",
+                                    field="flashcards")
+        if not 1 <= len(cards) <= 50:
+            raise OutputSchemaError("INVALID_FLASHCARD_SCHEMA",category="count",
+                                    field="flashcards",expected_count=count,
+                                    actual_count=len(cards))
         validated_cards = []
         card_pairs = set()
         for card in cards:
             if not isinstance(card, dict):
-                raise ValueError("INVALID_FLASHCARD_SCHEMA")
+                raise OutputSchemaError("INVALID_FLASHCARD_SCHEMA",category="type",
+                                        field="flashcards.item")
             front = card.get("front_text", card.get("front"))
             back = card.get("back_text", card.get("back"))
             topic, difficulty = card.get("topic"), card.get("difficulty")
             if not isinstance(front, str) or not front.strip() or len(front) > 8000:
-                raise ValueError("INVALID_FLASHCARD_SCHEMA")
+                raise OutputSchemaError("INVALID_FLASHCARD_SCHEMA",category="missing_or_type",
+                                        field="front_text")
             if not isinstance(back, str) or not back.strip() or len(back) > 16000:
-                raise ValueError("INVALID_FLASHCARD_SCHEMA")
+                raise OutputSchemaError("INVALID_FLASHCARD_SCHEMA",category="missing_or_type",
+                                        field="back_text")
             pair = (" ".join(front.casefold().split()), " ".join(back.casefold().split()))
             if pair in card_pairs:
-                raise ValueError("INVALID_FLASHCARD_SCHEMA")
+                raise OutputSchemaError("INVALID_FLASHCARD_SCHEMA",category="duplicate",
+                                        field="front_text/back_text")
             card_pairs.add(pair)
             if not isinstance(topic, str) or not topic.strip():
-                raise ValueError("INVALID_FLASHCARD_SCHEMA")
+                raise OutputSchemaError("INVALID_FLASHCARD_SCHEMA",category="missing_or_type",
+                                        field="topic")
             if not isinstance(difficulty, str) or difficulty not in self.DIFFICULTIES:
-                raise ValueError("INVALID_FLASHCARD_SCHEMA")
+                raise OutputSchemaError("INVALID_FLASHCARD_SCHEMA",category="value",
+                                        field="difficulty")
             validated = {
                 "front_text": front.strip(), "back_text": back.strip(),
                 "topic": trusted_topic or topic.strip(),
@@ -88,25 +104,62 @@ class FlashcardService:
                 validated["source_metadata"] = deepcopy(sources)
             validated_cards.append(validated)
         if count is not None and len(validated_cards) != count:
-            raise ValueError("INVALID_FLASHCARD_SCHEMA")
+            raise OutputSchemaError("INVALID_FLASHCARD_SCHEMA",category="count",
+                                    field="flashcards",expected_count=count,
+                                    actual_count=len(validated_cards))
         return {"flashcards": validated_cards}
 
     async def _generate(
         self, prompt: str, system_prompt: str, count: int, sources: Any,
         trusted_topic: Optional[str] = None, trusted_difficulty: Optional[str] = None,
+        correlation_id: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
+        correlation_id = correlation_id or uuid4().hex
+        started = time.monotonic()
+        record_generation_stage("flashcard",correlation_id,"provider","started",0)
         try:
             result = await self.orchestrator.generate(
-                prompt=prompt, system_prompt=system_prompt, **kwargs
+                prompt=prompt, system_prompt=system_prompt,
+                response_format={"type":"json_object"}, **kwargs
             )
         except Exception:
+            record_generation_stage("flashcard",correlation_id,"provider","failed",
+                                    (time.monotonic()-started)*1000,error_code="UNKNOWN_ERROR")
+            record_generation_stage("flashcard",correlation_id,"structural_validation","not_reached",0)
             raise ValueError("FLASHCARD_GENERATION_FAILED") from None
         if not isinstance(result, LLMResult) or result.status != "success":
+            diagnostic=safe_result(result) if isinstance(result,LLMResult) else None
+            code=diagnostic.error_code if diagnostic else "UNKNOWN_ERROR"
+            record_generation_stage("flashcard",correlation_id,"provider","failed",
+                (time.monotonic()-started)*1000,provider=diagnostic.provider if diagnostic else "unknown",
+                model=diagnostic.model if diagnostic else "unknown",
+                fallback_used=diagnostic.fallback_used if diagnostic else False,error_code=code,
+                **(provider_log_fields(diagnostic) if diagnostic else {}))
+            record_generation_stage("flashcard",correlation_id,"structural_validation","not_reached",0)
+            if code == "TIMEOUT_OR_NETWORK_ERROR": raise ValueError("LEARNING_GENERATION_TIMEOUT")
+            if code == "PROVIDER_UNCONFIGURED": raise ValueError("LEARNING_PROVIDER_UNCONFIGURED")
+            if code == "HTTP_429": raise ValueError("LEARNING_RATE_LIMITED")
+            if code == "HTTP_503": raise ValueError("LEARNING_PROVIDER_UNAVAILABLE")
             raise ValueError("FLASHCARD_GENERATION_FAILED")
-        return self.validate_and_parse_flashcards(
-            result.content, count, sources, trusted_topic, trusted_difficulty,
-        )
+        diagnostic=safe_result(result)
+        record_generation_stage("flashcard",correlation_id,"provider","passed",
+            (time.monotonic()-started)*1000,provider=diagnostic.provider,model=diagnostic.model,
+            fallback_used=diagnostic.fallback_used,**provider_log_fields(diagnostic))
+        validation_started=time.monotonic()
+        record_generation_stage("flashcard",correlation_id,"structural_validation","started",0)
+        try:
+            parsed=self.validate_and_parse_flashcards(
+                result.content, count, sources, trusted_topic, trusted_difficulty)
+        except Exception as error:
+            record_generation_stage("flashcard",correlation_id,"structural_validation","rejected",
+                                    (time.monotonic()-validation_started)*1000,
+                                    provider=diagnostic.provider,model=diagnostic.model,
+                                    **schema_log_fields(error))
+            raise
+        record_generation_stage("flashcard",correlation_id,"structural_validation","passed",
+                                (time.monotonic()-validation_started)*1000)
+        return parsed
 
     @staticmethod
     def _output_instruction(count: int) -> str:
@@ -114,12 +167,15 @@ class FlashcardService:
             f"Generate exactly {count} flashcards. Return valid JSON only with a "
             "'flashcards' list. Each card must contain non-empty front_text, back_text, "
             "topic, and difficulty (easy, medium, hard, or mixed). "
-            "Do not invent citations or source metadata; do not output source_metadata."
+            "Do not invent citations or source metadata; do not output source_metadata. "
+            "Use this exact JSON shape and no Markdown code fence: "
+            '{"flashcards":[{"front_text":"...","back_text":"...",'
+            '"topic":"...","difficulty":"easy"}]}.'
         )
 
     async def generate_grounded_flashcards(
         self, *, topic: str, count: int, difficulty: str, retrieved_context: str,
-        source_metadata: Any = None, **kwargs: Any
+        source_metadata: Any = None, correlation_id: Optional[str] = None, **kwargs: Any
     ) -> Dict[str, Any]:
         """Q4 entry point: retrieval and trusted sources must be supplied by caller."""
         if not isinstance(retrieved_context, str) or not retrieved_context.strip():
@@ -136,7 +192,8 @@ class FlashcardService:
             "trusted_retrieved_context": retrieved_context,
         }, ensure_ascii=False)
         return await self._generate(
-            prompt, system_prompt, count, sources, topic.strip(), difficulty, **kwargs,
+            prompt, system_prompt, count, sources, topic.strip(), difficulty,
+            correlation_id=correlation_id, **kwargs,
         )
 
     async def generate_flashcards(
