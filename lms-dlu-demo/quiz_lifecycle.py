@@ -15,6 +15,8 @@ from learning_access import learning_auth_unavailable, require_scope
 from backend.services.ai.grading_service import GradingService
 from backend.services.ai.quiz_service import QuizService
 
+TRUSTED_QUESTION_PROVENANCE_VERSION = 1
+
 
 class QuizDefinitionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -93,9 +95,9 @@ class QuizRepository:
             conn.commit()
 
     def save_quiz(self, data: QuizDefinitionRequest) -> None:
-        questions = _trusted_questions(data.questions)
         if data.learning_context is not None and data.learning_context.scope.course_id != data.course_id:
             raise ValueError("learning_scope_forbidden")
+        questions = _trusted_questions(data.questions, data.learning_context)
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         with self.connect() as conn:
             try:
@@ -257,7 +259,8 @@ def create_quiz_router(repository: QuizRepository, scope_dependency=None, writer
     return router
 
 
-def _trusted_questions(questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _trusted_questions(questions: list[dict[str, Any]],
+                       learning_context: VerifiedLearningContext | None = None) -> list[dict[str, Any]]:
     """Validate generated/internal quiz material and retain its stable question IDs."""
     try:
         # The domain validator preserves IDs; persisted artifacts require each ID.
@@ -281,8 +284,33 @@ def _trusted_questions(questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
                        if isinstance(source, dict) and isinstance(source.get("source_id"), str)]
             if sources:
                 question["source_metadata"] = sources
-        result.append({"question_id": question_id, **question})
+        stored={"question_id": question_id, **question}
+        provenance=_trusted_provenance(stored,learning_context)
+        if provenance is not None:
+            stored["trusted_provenance"]=provenance
+        result.append(stored)
     return result
+
+
+def _trusted_provenance(question: dict[str, Any],
+                        learning_context: VerifiedLearningContext | None) -> dict[str, Any] | None:
+    """Persist only source bindings independently verified by the issued context."""
+    if learning_context is None:
+        return None
+    sources={source.source_id:source for source in learning_context.sources
+             if source.provenance_status=="verified" and source.document_id
+             and source.version and source.content_hash}
+    bindings=[]
+    for item in question.get("source_metadata",[]):
+        source=sources.get(item.get("source_id")) if isinstance(item,dict) else None
+        if source is not None:
+            bindings.append({"source_id":source.source_id,"chapter_id":source.document_id,
+                             "version":source.version,"content_hash":source.content_hash})
+    if not bindings:
+        return None
+    unique={binding["source_id"]:binding for binding in bindings}
+    return {"version":TRUSTED_QUESTION_PROVENANCE_VERSION,
+            "bindings":[unique[key] for key in sorted(unique)]}
 
 
 def _validate_answers(questions: list[dict[str, Any]], answers: list[dict[str, Any]]) -> None:

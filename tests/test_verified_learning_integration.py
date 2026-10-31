@@ -20,6 +20,7 @@ from verified_identity_router import create_identity_router
 from course_query_auth import create_moodle_query_authorizer
 from deeptutor_integration.service import DeepTutorService
 from deeptutor_integration.errors import DeepTutorError
+from deeptutor_integration.contracts import AuthorizedCourseScope
 from test_verified_chat_integration import runtime, document
 from verified_learning_fakes import LearningConnection
 
@@ -65,7 +66,10 @@ def learning(runtime):
                     "evidence_id":candidate["evidence_id"],"answer_span_id":candidate["answer_span_id"]})
             content=json.dumps({"questions":questions})
         elif "flashcards" in system:
-            content=json.dumps({"flashcards":[{"front_text":"Python?","back_text":"Language","topic":"model topic","difficulty":"hard"}]})
+            request=json.loads(kwargs["prompt"]); count=request["count"]
+            cards=([{"front_text":"Python?","back_text":"Language","topic":"model topic","difficulty":"hard"}]
+                   if count==1 else [{"front_text":f"Python {request['topic']} {i}","back_text":"Verified Python lessons","topic":"model topic","difficulty":"medium"} for i in range(count)])
+            content=json.dumps({"flashcards":cards})
         elif "already-known grading result" in system:
             content=json.dumps({"explanation":"Python is a language.","key_concept":"Programming"})
         else: content="Grounded answer"
@@ -109,6 +113,139 @@ def test_chat_quiz_grade_evidence_progress_and_explanation_vertical_flow(learnin
     assert spoof.status_code==422
     score=client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[{"question_id":question_id,"selected_option_id":"B"}]}).json()
     assert score["score_percent"]==0 and score["correct_count"]==0
+    orch.generate.assert_not_awaited()
+
+
+def test_post_quiz_review_flashcards_uses_server_wrong_answers_and_is_idempotent(learning):
+    client,_,state,orch,_,_=learning
+    quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).json()
+    attempt=client.post(f"/learning/quizzes/{quiz['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[{"question_id":quiz["questions"][0]["question_id"],"selected_option_id":"B"}]})
+    created=client.post(f"/learning/attempts/{attempt}/review-flashcards",headers=headers())
+    assert created.status_code==200,created.text
+    body=created.json(); assert body["status"]=="READY" and body["flashcards"]
+    assert "correct_option_id" not in created.text and state["cards"]
+    again=client.post(f"/learning/attempts/{attempt}/review-flashcards",headers=headers())
+    assert again.json()=={"attempt_id":attempt,"batch_id":body["batch_id"],"status":"READY","flashcards":[]}
+
+
+def test_post_quiz_review_flashcards_all_correct_skips_provider(learning):
+    client,_,_,orch,_,_=learning
+    quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).json()
+    attempt=client.post(f"/learning/quizzes/{quiz['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[{"question_id":quiz["questions"][0]["question_id"],"selected_option_id":"A"}]})
+    orch.generate.reset_mock()
+    response=client.post(f"/learning/attempts/{attempt}/review-flashcards",headers=headers())
+    assert response.json()=={"attempt_id":attempt,"status":"NO_REVIEW_NEEDED","flashcards":[]}
+    orch.generate.assert_not_awaited()
+
+
+def test_post_quiz_review_flashcards_denies_foreign_owner_and_unsubmitted_attempt(learning):
+    client,_,_,_,_,_=learning
+    quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).json()
+    attempt=client.post(f"/learning/quizzes/{quiz['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    assert client.post(f"/learning/attempts/{attempt}/review-flashcards",headers=headers("B")).status_code==403
+    pending=client.post(f"/learning/attempts/{attempt}/review-flashcards",headers=headers())
+    assert pending.status_code==409 and pending.json()["detail"]["code"]=="attempt_not_submitted"
+
+
+def test_post_quiz_review_flashcards_rechecks_revoked_course_access(learning):
+    client,_,_,orch,_,adapter=learning
+    quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).json()
+    attempt=client.post(f"/learning/quizzes/{quiz['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[{"question_id":quiz["questions"][0]["question_id"],"selected_option_id":"B"}]})
+    adapter.authorization_state["revoked"]=True; orch.generate.reset_mock()
+    response=client.post(f"/learning/attempts/{attempt}/review-flashcards",headers=headers())
+    assert response.status_code==403 and response.json()["detail"]["code"]=="course_access_denied"
+    orch.generate.assert_not_awaited()
+
+
+@pytest.mark.parametrize("mutation",["legacy","ambiguous"])
+def test_post_quiz_review_flashcards_rejects_untrusted_provenance(learning,mutation):
+    client,_,state,_,_,_=learning
+    quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).json()
+    attempt=client.post(f"/learning/quizzes/{quiz['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[{"question_id":quiz["questions"][0]["question_id"],"selected_option_id":"B"}]})
+    definition=list(state["definitions"][quiz["quiz_id"]]); questions=json.loads(definition[3])
+    if mutation=="legacy": questions[0].pop("trusted_provenance",None)
+    else: questions[0]["trusted_provenance"]["bindings"].append({**questions[0]["trusted_provenance"]["bindings"][0],"chapter_id":"other-chapter"})
+    definition[3]=json.dumps(questions); state["definitions"][quiz["quiz_id"]]=tuple(definition)
+    response=client.post(f"/learning/attempts/{attempt}/review-flashcards",headers=headers())
+    assert response.status_code==409 and response.json()["detail"]=={"code":"trusted_topic_mapping_unavailable","message":"Review material is unavailable."}
+
+
+def test_post_quiz_review_flashcards_provider_failure_keeps_batch_unpublished(learning):
+    client,_,state,orch,_,_=learning
+    quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).json()
+    attempt=client.post(f"/learning/quizzes/{quiz['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[{"question_id":quiz["questions"][0]["question_id"],"selected_option_id":"B"}]})
+    orch.generate.side_effect=lambda **_: LLMResult("error","fake","fake","",0,error_code="HTTP_500")
+    response=client.post(f"/learning/attempts/{attempt}/review-flashcards",headers=headers())
+    assert response.status_code==502 and response.json()["detail"]["code"]=="FLASHCARD_GENERATION_FAILED" and not state["cards"]
+    assert state["batches"] and next(iter(state["batches"].values()))[3]=="FAILED"
+
+
+def test_post_quiz_review_flashcards_rejects_deleted_active_source(learning):
+    client,_,_,orch,pub,_=learning
+    quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).json()
+    attempt=client.post(f"/learning/quizzes/{quiz['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[{"question_id":quiz["questions"][0]["question_id"],"selected_option_id":"B"}]})
+    record=next(iter(pub.ledger.snapshot().records.values()))
+    from deeptutor_integration.contracts import AuthorizedCourseScope
+    scope=AuthorizedCourseScope(record.moodle_course_id,record.course_id,record.kb_id,"owner",record.source_namespace)
+    pub.delete(scope,"1"); orch.generate.reset_mock()
+    response=client.post(f"/learning/attempts/{attempt}/review-flashcards",headers=headers())
+    assert response.status_code==422 and response.json()["detail"]=={"code":"invalid_chapter","message":"The selected chapter is not an active publication."}
+    assert not orch.generate.await_count
+
+
+def test_post_quiz_review_flashcards_rejects_stale_source_binding(learning):
+    client,_,state,orch,_,_=learning
+    quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).json()
+    attempt=client.post(f"/learning/quizzes/{quiz['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[{"question_id":quiz["questions"][0]["question_id"],"selected_option_id":"B"}]})
+    definition=list(state["definitions"][quiz["quiz_id"]]); questions=json.loads(definition[3])
+    questions[0]["trusted_provenance"]["bindings"][0]["version"]="retired-version"
+    definition[3]=json.dumps(questions); state["definitions"][quiz["quiz_id"]]=tuple(definition)
+    orch.generate.reset_mock()
+    response=client.post(f"/learning/attempts/{attempt}/review-flashcards",headers=headers())
+    assert response.status_code==409 and response.json()["detail"]=={"code":"trusted_topic_mapping_unavailable","message":"Learning request could not be completed."}
+    orch.generate.assert_not_awaited()
+
+
+def test_post_quiz_review_flashcards_groups_distinct_trusted_chapters(learning):
+    client,_,state,_,pub,_=learning
+    pub.publish(AuthorizedCourseScope(9,"INT1339","int1339-python","owner","https://moodle.test"),
+                document("Verified Java lessons cover classes interfaces modules.").model_copy(update={"document_id":"2","original_filename":"chapter-two.md"}))
+    quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json={**generation(),"count":2}).json()
+    attempt=client.post(f"/learning/quizzes/{quiz['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    answers=[{"question_id":question["question_id"],"selected_option_id":"B"} for question in quiz["questions"]]
+    client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":answers})
+    chapter_one=next(record for record in pub.ledger.snapshot().records.values() if record.document_id=="1")
+    chapter_two=next(record for record in pub.ledger.snapshot().records.values() if record.document_id=="2")
+    definition=list(state["definitions"][quiz["quiz_id"]]); questions=json.loads(definition[3])
+    questions[0]["trusted_provenance"]={"version":1,"bindings":[{"source_id":chapter_one.chunk_manifest[0].source_ref,
+        "chapter_id":"1","version":chapter_one.document_version_id,"content_hash":chapter_one.chunk_manifest[0].content_sha256}]}
+    questions[1]["trusted_provenance"]={"version":1,"bindings":[{"source_id":chapter_two.chunk_manifest[0].source_ref,
+        "chapter_id":"2","version":chapter_two.document_version_id,"content_hash":chapter_two.chunk_manifest[0].content_sha256}]}
+    definition[3]=json.dumps(questions); state["definitions"][quiz["quiz_id"]]=tuple(definition)
+    response=client.post(f"/learning/attempts/{attempt}/review-flashcards",headers=headers())
+    assert response.status_code==200,response.text
+    body=response.json(); assert body["status"]=="READY" and len(body["flashcards"])==10
+    assert {row[2] for row in state["batch_cards"]}=={"1","2"}
+
+
+def test_post_quiz_review_flashcards_reports_active_reservation_as_pending(learning):
+    client,store,state,orch,_,_=learning
+    quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).json()
+    attempt=client.post(f"/learning/quizzes/{quiz['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[{"question_id":quiz["questions"][0]["question_id"],"selected_option_id":"B"}]})
+    row=state["attempts"][attempt]
+    scope=AuthorizedCourseScope(9,"INT1339","int1339-python",row["student_id"],"https://moodle.test")
+    reserved=store.reserve_review_batch(attempt,scope,{"chapters":["1"]})
+    orch.generate.reset_mock()
+    response=client.post(f"/learning/attempts/{attempt}/review-flashcards",headers=headers())
+    assert response.json()=={"attempt_id":attempt,"batch_id":reserved["batch_id"],"status":"PENDING","flashcards":[]}
     orch.generate.assert_not_awaited()
 
 

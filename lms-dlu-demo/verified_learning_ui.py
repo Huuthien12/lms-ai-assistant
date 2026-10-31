@@ -317,6 +317,14 @@ def render_verified_learning(base_url):
         if grade:=st.session_state.get("work_grade"):
             st.metric("Điểm từ server",grade["score_percent"])
             st.write(f"Đúng {grade['correct_count']}/{grade['total_questions']}")
+            if grade.get("correct_count",0) < grade.get("total_questions",0):
+                if st.button("Ôn tập câu sai bằng Flashcard",key="review_wrong_answers"):
+                    try:
+                        with st.spinner("Đang tạo Flashcard ôn tập từ tài liệu ACTIVE..."):
+                            batch=client.request("POST","/learning/attempts/"+grade["attempt_id"]+"/review-flashcards",timeout_seconds=generation_client_timeout)
+                        st.session_state.work_review_batch=batch
+                        st.success("Đã chuẩn bị Flashcard ôn tập. Mở tab Flashcards để ghi nhận mức độ nhớ.")
+                    except BackendRequestError as error: show_error(error)
             review=st.session_state.get("work_review",{})
             unavailable=[item["question_id"] for item in review.get("results",[])
                          if item.get("explanation_status")!="available"]

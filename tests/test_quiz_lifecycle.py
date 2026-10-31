@@ -13,7 +13,7 @@ from quiz_lifecycle import (  # noqa: E402
     QuizDefinitionRequest, QuizRepository, StartAttemptRequest, _trusted_questions,
     _validate_answers, _public_submission_result, create_quiz_router,
 )
-from backend.services.ai.learning_context import LearningScope
+from backend.services.ai.learning_context import LearningScope, LearningSource, VerifiedLearningContext
 SCOPE = LearningScope(owner_id="student-1", course_id="course-1")
 
 from backend.services.ai.grading_service import GradingService  # noqa: E402
@@ -113,6 +113,24 @@ def test_trusted_definition_retains_only_question_source_ids_for_review_mapping(
     ]}])
     assert trusted[0]["source_metadata"] == [{"source_id": "verified-source"}]
     assert "source_metadata" not in QuizService.to_public_result({"questions": trusted})["questions"][0]
+
+
+def test_trusted_definition_binds_question_to_verified_chapter_provenance():
+    context=VerifiedLearningContext(scope=SCOPE,kb_id="kb",retrieval_id="receipt",text="verified",
+        sources=(LearningSource(source_id="verified-source",document_id="chapter-a",version="v1",
+                                content_hash="hash",provenance_status="verified"),))
+    trusted=_trusted_questions([{**QUESTIONS[0],"source_metadata":[{"source_id":"verified-source"}]}],context)
+    assert trusted[0]["trusted_provenance"] == {"version":1,"bindings":[
+        {"source_id":"verified-source","chapter_id":"chapter-a","version":"v1","content_hash":"hash"}]}
+    assert "trusted_provenance" not in QuizService.to_public_result({"questions":trusted})["questions"][0]
+
+
+def test_trusted_definition_without_verified_binding_stays_p5_compatible_but_p6_ineligible():
+    context=VerifiedLearningContext(scope=SCOPE,kb_id="kb",retrieval_id="receipt",text="verified",
+        sources=(LearningSource(source_id="other",document_id="chapter-a",version="v1",
+                                content_hash="hash",provenance_status="verified"),))
+    trusted=_trusted_questions([{**QUESTIONS[0],"source_metadata":[{"source_id":"unmatched"}]}],context)
+    assert "trusted_provenance" not in trusted[0]
 
 
 def test_start_is_idempotent_and_enforces_course_and_quiz():

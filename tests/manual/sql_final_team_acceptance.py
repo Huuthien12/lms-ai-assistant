@@ -9,6 +9,7 @@ import os
 import re
 import sys
 import uuid
+from types import SimpleNamespace
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
@@ -25,7 +26,7 @@ from test_final_team_integration import team, learning, runtime, sync, headers, 
 from backend.services.ai.grounded_chat import GroundedChatService
 from backend.services.ai.recommendation_service import RecommendationService
 from backend.services.ai.grading_service import GradingService
-from backend.services.ai.learning_context import LearningScope
+from backend.services.ai.learning_context import LearningScope, LearningSource, VerifiedLearningContext
 from quiz_lifecycle import QuizRepository, StartAttemptRequest, create_quiz_router
 from learning_evidence import LearningEvidenceRepository, FlashcardRegistration, create_learning_router
 from verified_learning_repository import VerifiedLearningRepository, restore_context
@@ -92,6 +93,111 @@ def sql_store(request):
             assert master.cursor().execute("SELECT DB_ID(?)", name).fetchone()[0] is None
             print("OWNED_SQL_TEST_DATABASE_REMOVED; PRODUCTION_DATABASE_MODIFIED=False")
         master.close()
+
+
+def _batch_card(card_id):
+    context=VerifiedLearningContext(scope=LearningScope(owner_id="A",course_id="INT1339"),kb_id="kb",
+        retrieval_id="receipt",text="verified material",sources=(LearningSource(source_id="source-a",
+        document_id="chapter-a",version="v1",content_hash="hash-a",provenance_status="verified"),))
+    return FlashcardRegistration(flashcard_id=card_id,course_id="INT1339",topic="chapter-a",
+        front_text="Front",back_text="Back",owner_id="A",learning_context=context)
+
+
+def test_p6a1_real_sql_atomic_publication_and_lease(sql_store):
+    store,scalar,_=sql_store; scope=SimpleNamespace(owner_ref="A",course_key="INT1339")
+    attempt="attempt-batch"; quiz="quiz-batch"
+    with store.connect() as conn:
+        cursor=conn.cursor()
+        cursor.execute("INSERT INTO dbo.QuizDefinitions (quiz_id,course_id,topic,difficulty,questions_json,created_at) VALUES (?,?,?,?,?,SYSUTCDATETIME())",quiz,"INT1339","topic","easy","[]")
+        cursor.execute("INSERT INTO dbo.QuizAttempts (attempt_id,quiz_id,student_id,course_id,status,started_at) VALUES (?,?,?,'INT1339','SUBMITTED',SYSUTCDATETIME())",attempt,quiz,"A")
+        conn.commit()
+    first=store.reserve_review_batch(attempt,scope,{"trusted":True})
+    second=store.reserve_review_batch(attempt,scope,{"trusted":True})
+    assert first["batch_id"]==second["batch_id"] and second=={"batch_id":first["batch_id"],"status":"PENDING"}
+    card=_batch_card("card-batch")
+    ready=store.publish_review_batch(first["batch_id"],first["lease_id"],scope,[card],{card.flashcard_id:"chapter-a"},{card.flashcard_id:{"context":{}}})
+    assert ready["status"]=="READY"
+    assert scalar("SELECT COUNT(*) FROM dbo.Flashcards WHERE flashcard_id=?",card.flashcard_id)==1
+    assert scalar("SELECT COUNT(*) FROM dbo.VerifiedLearningArtifacts WHERE artifact_type='flashcard' AND artifact_id=?",card.flashcard_id)==1
+    assert scalar("SELECT COUNT(*) FROM dbo.ReviewBatchCards WHERE batch_id=?",ready["batch_id"])==1
+    assert store.reserve_review_batch(attempt,scope,{})=={"batch_id":ready["batch_id"],"status":"READY"}
+
+
+def test_p6a1_real_sql_expired_lease_is_reclaimed_and_stale_worker_loses(sql_store):
+    store,_,_=sql_store; scope=SimpleNamespace(owner_ref="A",course_key="INT1339")
+    with store.connect() as conn:
+        c=conn.cursor(); c.execute("INSERT INTO dbo.QuizDefinitions (quiz_id,course_id,topic,difficulty,questions_json,created_at) VALUES ('quiz-expired','INT1339','topic','easy','[]',SYSUTCDATETIME())")
+        c.execute("INSERT INTO dbo.QuizAttempts (attempt_id,quiz_id,student_id,course_id,status,started_at) VALUES ('attempt-expired','quiz-expired','A','INT1339','SUBMITTED',SYSUTCDATETIME())"); conn.commit()
+    first=store.reserve_review_batch("attempt-expired",scope,{})
+    with store.connect() as conn:
+        conn.cursor().execute("UPDATE dbo.ReviewBatches SET updated_at=DATEADD(minute,-6,SYSUTCDATETIME()) WHERE batch_id=?",first["batch_id"]); conn.commit()
+    second=store.reserve_review_batch("attempt-expired",scope,{})
+    assert second["batch_id"]==first["batch_id"] and second["lease_id"]!=first["lease_id"]
+    card=_batch_card("card-expired")
+    with pytest.raises(ValueError,match="review_batch_lease_lost"):
+        store.publish_review_batch(first["batch_id"],first["lease_id"],scope,[card],{card.flashcard_id:"chapter-a"},{card.flashcard_id:{"context":{}}})
+    assert store.publish_review_batch(second["batch_id"],second["lease_id"],scope,[card],{card.flashcard_id:"chapter-a"},{card.flashcard_id:{"context":{}}})["status"]=="READY"
+
+
+@pytest.mark.parametrize("target",["flashcards","artifacts","mappings","ready"])
+def test_p6a1_real_sql_publication_failure_rolls_back(sql_store,target):
+    store,scalar,_=sql_store; scope=SimpleNamespace(owner_ref="A",course_key="INT1339")
+    attempt="attempt-"+target; quiz="quiz-"+target; card=_batch_card("card-"+target)
+    with store.connect() as conn:
+        c=conn.cursor(); c.execute("INSERT INTO dbo.QuizDefinitions (quiz_id,course_id,topic,difficulty,questions_json,created_at) VALUES (?,?,?,?,?,SYSUTCDATETIME())",quiz,"INT1339","topic","easy","[]")
+        c.execute("INSERT INTO dbo.QuizAttempts (attempt_id,quiz_id,student_id,course_id,status,started_at) VALUES (?,?,?,'INT1339','SUBMITTED',SYSUTCDATETIME())",attempt,quiz,"A"); conn.commit()
+    reservation=store.reserve_review_batch(attempt,scope,{})
+    table={"flashcards":"Flashcards","artifacts":"VerifiedLearningArtifacts","mappings":"ReviewBatchCards","ready":"ReviewBatches"}[target]
+    with store.connect() as conn:
+        c=conn.cursor(); c.execute(f"CREATE TRIGGER dbo.fail_{target} ON dbo.{table} AFTER INSERT, UPDATE AS BEGIN IF EXISTS (SELECT 1 FROM inserted" + (" WHERE status='READY'" if target=="ready" else "") + ") THROW 51000, 'injected', 1; END") ; conn.commit()
+    with pytest.raises(ValueError,match="persistence_failure"):
+        store.publish_review_batch(reservation["batch_id"],reservation["lease_id"],scope,[card],{card.flashcard_id:"chapter-a"},{card.flashcard_id:{"context":{}}})
+    assert scalar("SELECT COUNT(*) FROM dbo.Flashcards WHERE flashcard_id=?",card.flashcard_id)==0
+    assert scalar("SELECT COUNT(*) FROM dbo.ReviewBatchCards WHERE batch_id=?",reservation["batch_id"])==0
+    assert scalar("SELECT status FROM dbo.ReviewBatches WHERE batch_id=?",reservation["batch_id"])=="PENDING"
+
+
+def test_p6a1_real_sql_two_connections_share_one_attempt_reservation(sql_store):
+    store,scalar,_=sql_store; scope=SimpleNamespace(owner_ref="A",course_key="INT1339")
+    with store.connect() as conn:
+        c=conn.cursor(); c.execute("INSERT INTO dbo.QuizDefinitions (quiz_id,course_id,topic,difficulty,questions_json,created_at) VALUES ('quiz-race','INT1339','topic','easy','[]',SYSUTCDATETIME())")
+        c.execute("INSERT INTO dbo.QuizAttempts (attempt_id,quiz_id,student_id,course_id,status,started_at) VALUES ('attempt-race','quiz-race','A','INT1339','SUBMITTED',SYSUTCDATETIME())"); conn.commit()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results=list(pool.map(lambda _: store.reserve_review_batch("attempt-race",scope,{}),range(2)))
+    assert len({item["batch_id"] for item in results})==1
+    assert scalar("SELECT COUNT(*) FROM dbo.ReviewBatches WHERE attempt_id='attempt-race'")==1
+
+
+def test_p6a1_real_sql_overlapping_publication_creates_one_ready_batch(sql_store):
+    store,scalar,_=sql_store; scope=SimpleNamespace(owner_ref="A",course_key="INT1339")
+    with store.connect() as conn:
+        c=conn.cursor(); c.execute("INSERT INTO dbo.QuizDefinitions (quiz_id,course_id,topic,difficulty,questions_json,created_at) VALUES ('quiz-publish-race','INT1339','topic','easy','[]',SYSUTCDATETIME())")
+        c.execute("INSERT INTO dbo.QuizAttempts (attempt_id,quiz_id,student_id,course_id,status,started_at) VALUES ('attempt-publish-race','quiz-publish-race','A','INT1339','SUBMITTED',SYSUTCDATETIME())"); conn.commit()
+    reservation=store.reserve_review_batch("attempt-publish-race",scope,{})
+    card=_batch_card("card-publish-race")
+    def publish():
+        return store.publish_review_batch(reservation["batch_id"],reservation["lease_id"],scope,[card],{card.flashcard_id:"chapter-a"},{card.flashcard_id:{"context":{}}})
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results=list(pool.map(lambda _:publish(),range(2)))
+    assert all(result["status"]=="READY" for result in results)
+    assert scalar("SELECT COUNT(*) FROM dbo.Flashcards WHERE flashcard_id=?",card.flashcard_id)==1
+    assert scalar("SELECT COUNT(*) FROM dbo.ReviewBatchCards WHERE batch_id=?",reservation["batch_id"])==1
+
+
+def test_p6a1_real_sql_duplicate_batch_membership_is_database_enforced(sql_store):
+    store,scalar,_=sql_store; scope=SimpleNamespace(owner_ref="A",course_key="INT1339")
+    with store.connect() as conn:
+        c=conn.cursor(); c.execute("INSERT INTO dbo.QuizDefinitions (quiz_id,course_id,topic,difficulty,questions_json,created_at) VALUES ('quiz-membership','INT1339','topic','easy','[]',SYSUTCDATETIME())")
+        c.execute("INSERT INTO dbo.QuizAttempts (attempt_id,quiz_id,student_id,course_id,status,started_at) VALUES ('attempt-membership','quiz-membership','A','INT1339','SUBMITTED',SYSUTCDATETIME())"); conn.commit()
+    reservation=store.reserve_review_batch("attempt-membership",scope,{})
+    card=_batch_card("card-membership")
+    store.publish_review_batch(reservation["batch_id"],reservation["lease_id"],scope,[card],{card.flashcard_id:"chapter-a"},{card.flashcard_id:{"context":{}}})
+    with store.connect() as conn:
+        with pytest.raises(pyodbc.Error):
+            conn.cursor().execute("INSERT INTO dbo.ReviewBatchCards (batch_id,flashcard_id,chapter_id) VALUES (?,?,?)",reservation["batch_id"],card.flashcard_id,"chapter-a")
+            conn.commit()
+        conn.rollback()
+    assert scalar("SELECT COUNT(*) FROM dbo.ReviewBatchCards WHERE batch_id=?",reservation["batch_id"])==1
 
 
 def test_final_team_sql_acceptance(team, sql_store):
