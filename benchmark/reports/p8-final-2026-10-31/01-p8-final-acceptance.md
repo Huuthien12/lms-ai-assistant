@@ -38,6 +38,46 @@ Fresh provider/grounding tests cover configured provider behavior, missing/inval
 
 Commands were run sequentially with `lms-dlu-demo\venv\Scripts\python.exe -m pytest -q --tb=short -p no:cacheprovider`; no parallel pytest workers, live Moodle, provider, SQL Server, or browser session was used. The Streamlit evidence is AppTest-based, not a manufactured screenshot or claim of live visual inspection.
 
+Exact P8 commands:
+
+```powershell
+lms-dlu-demo\venv\Scripts\python.exe -m pytest -q --tb=short -p no:cacheprovider `
+  tests/test_demo_quick_login.py tests/test_demo_launcher_security.py `
+  tests/test_verified_identity.py tests/test_learning_route_security.py `
+  tests/test_verified_publication.py tests/test_verified_chat_integration.py `
+  tests/test_verified_learning_integration.py tests/test_verified_learning.py `
+  tests/test_verified_learning_ui.py tests/test_quiz_lifecycle.py `
+  tests/test_learning_generation_retry.py tests/ai/test_recommendation_service.py `
+  --junitxml benchmark/reports/p8-final-2026-10-31/p8-focused-system.junit.xml
+
+lms-dlu-demo\venv\Scripts\python.exe -m pytest -q --tb=short -p no:cacheprovider `
+  tests/ai/test_explanation_service.py tests/ai/test_quiz_semantic_grounding.py `
+  tests/ai/test_quiz_service.py tests/ai/test_learning_provider.py `
+  tests/ai/test_demo_chat_provider.py tests/ai/test_deeptutor_provider.py `
+  tests/ai/test_ollama_provider.py tests/ai/test_deepseek_provider.py `
+  tests/ai/test_q7_providers.py tests/ai/test_grounded_chat.py `
+  tests/test_grounded_chat_router.py tests/test_moodle_adapter.py `
+  tests/test_moodle_discovery_router.py tests/test_moodle_ingestion_router.py `
+  tests/test_moodle_ingestion_ledger.py tests/test_moodle_ingestion_ledger_v2.py `
+  tests/deeptutor_integration/test_moodle_trust.py `
+  --junitxml benchmark/reports/p8-final-2026-10-31/p8-p5-p7-provider-publication.junit.xml
+```
+
+## Acceptance coverage matrix
+
+| SRS M1–M4 / P8 concern | Current implementation and fresh evidence | Live/manual boundary |
+| --- | --- | --- |
+| P4 identity, course scope, publication, retrieval, chat | `test_verified_identity`, `test_learning_route_security`, `test_verified_publication`, `test_verified_chat_integration`, `test_grounded_chat_router`, Moodle trust/adapter tests | Live Moodle identity, enrollment, and real document retrieval remain operator acceptance |
+| P5 grounded Quiz, private keys, deterministic grade, explanation | `test_verified_learning`, `test_quiz_lifecycle`, Quiz semantic/service tests, `test_explanation_service` | Real provider output is not asserted without approved provider access |
+| P6 grounded Flashcards, wrong-answer batches, ratings, atomic failure behavior | `test_verified_learning`, `test_verified_learning_integration`, `test_verified_learning_ui`, retry tests | Historical P6 disposable-SQL matrix is retained; no new P8 disposable database authorization |
+| P7 evidence, 80/20 mastery, recommendations | `test_verified_learning`, `test_verified_learning_integration`, `test_recommendation_service`, UI tests | Real learner progress remains live acceptance |
+| Provider/fallback safety | Learning/demo/DeepTutor/Ollama/DeepSeek/Q7 provider tests plus grounded-chat tests | No paid or live provider invocation was performed |
+| Launcher, quick login, loopback binding | `test_demo_quick_login`, `test_demo_launcher_security`; launcher has Moodle/SQL/provider/port/readiness checks | A real Windows launcher run is an operator environment check |
+
+## Performance and resource observations
+
+Both P8 suites were executed sequentially with cache provider disabled: the focused suite completed in 20.56 seconds and the provider/publication suite in 24.82 seconds on this machine. No xdist workers, Docker rebuilds, live providers, database creation, or simultaneous heavy test processes were used. These are observations, not new performance requirements or a live capacity claim.
+
 ## Demo and deployment material
 
 - Primary final procedure: `docs/p8-final-demo-and-deployment.md`.
