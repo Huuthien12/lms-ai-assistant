@@ -207,14 +207,14 @@ QUIZ_REPOSITORY = QuizRepository(get_connection, LEARNING_EVIDENCE)
 from verified_learning_repository import VerifiedLearningRepository
 from verified_learning_router import create_verified_learning_router
 VERIFIED_LEARNING = VerifiedLearningRepository(get_connection, QUIZ_REPOSITORY, LEARNING_EVIDENCE)
-app.include_router(create_verified_learning_router(QUERY_AUTHORIZER,VERIFIED_PUBLICATIONS,VERIFIED_LEARNING,
-    LEARNING_GENERATION_ORCHESTRATOR,GROUNDED_CHAT_SERVICE,
-    RecommendationService(GROUNDED_CHAT_SERVICE.orchestrator)))
 from legacy_route_security import create_learning_scope_dependency,resource_owner_lookup
 _LEARNING_SCOPE=create_learning_scope_dependency(QUERY_AUTHORIZER,resource_owner_lookup(get_connection))
 _LEARNING_WRITER=create_moodle_service_dependency(os.getenv("LMS_MOODLE_DISCOVERY_TOKEN"))
 app.include_router(create_quiz_router(QUIZ_REPOSITORY,scope_dependency=_LEARNING_SCOPE,writer_dependency=_LEARNING_WRITER))
 app.include_router(create_learning_router(LEARNING_EVIDENCE,scope_dependency=_LEARNING_SCOPE,writer_dependency=_LEARNING_WRITER))
+app.include_router(create_verified_learning_router(QUERY_AUTHORIZER,VERIFIED_PUBLICATIONS,VERIFIED_LEARNING,
+    LEARNING_GENERATION_ORCHESTRATOR,GROUNDED_CHAT_SERVICE,
+    RecommendationService(GROUNDED_CHAT_SERVICE.orchestrator)))
 app.include_router(create_workflow_router(
     LearningWorkflowRepository(get_connection, LEARNING_EVIDENCE),
     RecommendationService(GROUNDED_CHAT_SERVICE.orchestrator),scope_dependency=_LEARNING_SCOPE,
