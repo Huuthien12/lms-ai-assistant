@@ -36,6 +36,8 @@ The fresh suite exercises missing/foreign/revoked authorization, private attempt
 
 No release candidate source was modified during this acceptance run. The final documentation candidate must receive a staged secret scan and `git diff --cached --check` before publication. `.env`, DPAPI material, JUnit artifacts, logs, runtime data, virtual environments, and pre-existing untracked benchmark data are excluded.
 
+A separate read-only scan of all tracked files found no tracked `.env`, DPAPI, private-key, certificate, database, or SQLite artifact and no high-confidence private-key, AWS, GitHub, Slack, or Google API-key marker. The tracked `.env.example` contains blank placeholders only and explicitly directs operators to keep real secrets local.
+
 ## Limitations
 
 No real Moodle token, SQL connection, provider request, or browser session was used. Therefore real provider logging/data-boundary behavior and live service error surfaces remain PENDING APPROVAL even though their safe test counterparts pass.
