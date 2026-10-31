@@ -119,7 +119,7 @@ class LearningGenerationService:
         return {"quiz_id": quiz_id, "course_id": scope.course_id,
                 **QuizService.to_public_result(internal)}
 
-    async def generate_flashcards(self, scope: LearningScope, context: VerifiedLearningContext,
+    async def prepare_flashcards(self, scope: LearningScope, context: VerifiedLearningContext,
                                  *, topic: str, count: int, difficulty: str,
                                  existing_pairs: set[tuple[str,str]] | None = None,
                                  correlation_id: str | None = None, timeout_seconds: float | None = None,
@@ -157,17 +157,19 @@ class LearningGenerationService:
         if deadline is not None and time.monotonic() >= deadline:
             record_generation_stage("flashcard",correlation_id,"persistence","not_reached",0)
             raise ValueError("LEARNING_GENERATION_TIMEOUT")
-        persistence_started=time.monotonic()
-        record_generation_stage("flashcard",correlation_id,"persistence","started",0)
-        try: await asyncio.to_thread(self.evidence.register_flashcards,cards)
-        except Exception:
-            record_generation_stage("flashcard",correlation_id,"persistence","failed",
-                                    (time.monotonic()-persistence_started)*1000)
-            raise
-        record_generation_stage("flashcard",correlation_id,"persistence","passed",
-                                (time.monotonic()-persistence_started)*1000)
         return {"course_id": scope.course_id,"requested_count":count,
-                "created_count":len(cards),"skipped_duplicate_count":count-len(cards),"flashcards": [
+                "created_count":len(cards),"skipped_duplicate_count":count-len(cards),"_cards":cards,"flashcards": [
             {"flashcard_id": card.flashcard_id, "front_text": card.front_text,
              "back_text": card.back_text, "topic": card.topic,
              "sources": context.source_metadata()} for card in cards]}
+
+    async def generate_flashcards(self,*args,**kwargs):
+        prepared=await self.prepare_flashcards(*args,**kwargs)
+        cards=prepared.pop("_cards")
+        correlation_id=kwargs.get("correlation_id") or "flashcard"
+        started=time.monotonic(); record_generation_stage("flashcard",correlation_id,"persistence","started",0)
+        try: await asyncio.to_thread(self.evidence.register_flashcards,cards)
+        except Exception:
+            record_generation_stage("flashcard",correlation_id,"persistence","failed",(time.monotonic()-started)*1000); raise
+        record_generation_stage("flashcard",correlation_id,"persistence","passed",(time.monotonic()-started)*1000)
+        return prepared

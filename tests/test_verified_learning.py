@@ -156,6 +156,26 @@ async def test_flashcard_generation_persists_content_and_review_evidence():
     assert len(state["events"]) == 1
 
 
+@pytest.mark.asyncio
+async def test_prepare_flashcards_validates_without_persistence():
+    state, provider, gen, _, _, _ = composition()
+    provider.generate.return_value.content = json.dumps({"flashcards": [{
+        "front": "One?", "back": "A", "topic": "topic", "difficulty": "easy"}]})
+    before=copy.deepcopy(state)
+    prepared=await gen.prepare_flashcards(SCOPE,context(),topic="topic",count=1,difficulty="easy")
+    assert prepared["_cards"] and state==before
+
+
+@pytest.mark.asyncio
+async def test_prepare_flashcards_invalid_output_writes_nothing():
+    state, provider, gen, _, _, _ = composition()
+    provider.generate.return_value.content=json.dumps({"flashcards":[{"front":"","back":"A","topic":"topic","difficulty":"easy"}]})
+    before=copy.deepcopy(state)
+    with pytest.raises(ValueError,match="INVALID_FLASHCARD_SCHEMA"):
+        await gen.prepare_flashcards(SCOPE,context(),topic="topic",count=1,difficulty="easy")
+    assert state==before
+
+
 @pytest.mark.parametrize("scope", [LearningScope(owner_id="attacker", course_id="course-1"),
                                    LearningScope(owner_id="student-1", course_id="other")])
 def test_submit_checks_owner_and_course_before_grading_or_mutation(scope):

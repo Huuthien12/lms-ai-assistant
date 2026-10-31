@@ -53,8 +53,8 @@ def test_authenticated_streamlit_chat_quiz_grade_progress_and_logout(ui):
     button(ui,"Tạo Quiz").click().run()
     assert not ui.exception
     assert "correct_option_id" not in str(ui.session_state["work_quiz"])
-    quiz_radio=next(radio for radio in ui.radio if radio.label.startswith("Complete the missing text"))
     question=ui.session_state["work_quiz"]["questions"][0]
+    quiz_radio=next(radio for radio in ui.radio if radio.label==display_quiz_text(question["question"]))
     assert quiz_radio.value is None
     assert list(quiz_radio.options)==[display_quiz_text(option["text"]) for option in question["options"]]
     option_id=question["options"][0]["id"]
@@ -85,6 +85,19 @@ def test_authenticated_streamlit_chat_quiz_grade_progress_and_logout(ui):
     assert next(item for item in ui.selectbox if item.label=="Khóa học của tôi").options==["Khóa học"]
     assert ui.session_state["verified_course"]=="OTHER"
     assert not ui.session_state["work_messages"]
+
+
+def test_streamlit_post_quiz_flashcard_review_action(ui):
+    login(ui)
+    ui.number_input[0].set_value(1)
+    button(ui,"Tạo Quiz").click().run()
+    question=ui.session_state["work_quiz"]["questions"][0]
+    quiz_radio=next(radio for radio in ui.radio if radio.label==display_quiz_text(question["question"]))
+    quiz_radio.set_value(question["options"][1]["id"])
+    button(ui,"Nộp bài").click().run()
+    assert ui.session_state["work_grade"]["score_percent"]==0
+    button(ui,"Ôn tập câu sai bằng Flashcard").click().run()
+    assert not ui.exception and ui.session_state["work_review_batch"]["status"]=="READY"
 
 
 def test_quiz_and_flashcard_number_inputs_stay_within_limits(ui):

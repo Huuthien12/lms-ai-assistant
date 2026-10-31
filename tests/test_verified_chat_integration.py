@@ -30,6 +30,7 @@ def document(text):
 @pytest.fixture
 def runtime(tmp_path,monkeypatch):
     adapter=MagicMock(); indexed={}
+    authorization_state={"revoked":False}; adapter.authorization_state=authorization_state
     def publish(kb,path):
         raw={"provider":"llamaindex","index_version":"version-test","publication_ref":kb,
              "chunks":[{"chunk_id":"real-node","content":path.read_text(encoding="utf-8")} ]}
@@ -45,7 +46,8 @@ def runtime(tmp_path,monkeypatch):
         if token not in {"A","B"}: return httpx.Response(200,json={"errorcode":"invalidtoken"})
         uid=1 if token=="A" else 2
         if kw["data"]["wsfunction"]=="core_webservice_get_site_info": return httpx.Response(200,json={"userid":uid,"siteurl":"https://moodle.test","functions":[{"name":"core_enrol_get_users_courses"}]})
-        return httpx.Response(200,json=[{"id":9 if uid==1 else 10,"shortname":"INT1339" if uid==1 else "OTHER"}])
+        courses=[] if uid==1 and authorization_state["revoked"] else [{"id":9 if uid==1 else 10,"shortname":"INT1339" if uid==1 else "OTHER"}]
+        return httpx.Response(200,json=courses)
     monkeypatch.setattr("deeptutor_integration.moodle_trust.requests.post",moodle)
     authorizer=create_moodle_query_authorizer(service,"https://moodle.test")
     orch=MagicMock(); orch.generate=AsyncMock(return_value=LLMResult("success","fake","fake","Answer",0))

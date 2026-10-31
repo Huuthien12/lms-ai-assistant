@@ -63,6 +63,9 @@ class SafeLearningRoute(APIRoute):
                        "LEARNING_GENERATION_TIMEOUT":504,"LEARNING_PROVIDER_UNCONFIGURED":503,
                         "LEARNING_PROVIDER_UNAVAILABLE":503,"LEARNING_PROVIDER_REQUEST_TOO_LARGE":413,
                        "LEARNING_RATE_LIMITED":429,"invalid_chapter":422,"NO_NEW_FLASHCARDS":409}
+                known.update({"attempt_not_submitted":409,"trusted_topic_mapping_unavailable":409,
+                              "review_batch_lease_lost":409,"review_batch_not_found":404,
+                              "invalid_flashcard":422})
                 status=known.get(code,503)
                 if code not in known: code="learning_dependency_unavailable"
                 detail={"code":code,"message":"Learning request could not be completed."}
@@ -170,6 +173,29 @@ def question_citations(question,citations):
                 if isinstance(source,dict) and isinstance(source.get("source_id"),str)}
     return [source for source in citations
             if isinstance(source,dict) and source.get("source_id") in source_ids]
+
+
+@asynccontextmanager
+async def trusted_question_context(publications,access,scope,question):
+    """Issue a fresh receipt only for one unambiguous persisted provenance binding."""
+    provenance=question.get("trusted_provenance") if isinstance(question,dict) else None
+    bindings=provenance.get("bindings") if isinstance(provenance,dict) and provenance.get("version")==1 else None
+    if not isinstance(bindings,list) or not bindings:
+        raise ValueError("trusted_topic_mapping_unavailable")
+    required={(item.get("source_id"),item.get("chapter_id"),item.get("version"),item.get("content_hash"))
+              for item in bindings if isinstance(item,dict)}
+    if len(required)!=len(bindings) or any(not all(item) for item in required):
+        raise ValueError("trusted_topic_mapping_unavailable")
+    chapters={item[1] for item in required}
+    if len(chapters)!=1:
+        raise ValueError("trusted_topic_mapping_unavailable")
+    await run_in_threadpool(access.reauthorize,scope)
+    async with learning_context(publications,scope,next(iter(chapters)),document_id=next(iter(chapters))) as context:
+        actual={(source.source_id,source.document_id,source.version,source.content_hash)
+                for source in publications.learning_context(context).sources}
+        if not required <= actual:
+            raise ValueError("trusted_topic_mapping_unavailable")
+        yield context
 
 
 def create_verified_learning_router(authorizer,publications,repository,orchestrator,chat_service,recommendations,
@@ -377,6 +403,52 @@ def create_verified_learning_router(authorizer,publications,repository,orchestra
                 results.append(item)
         finally: await run_in_threadpool(lease.__exit__,None,None,None)
         return {"attempt_id":attempt_id,"results":results}
+
+    @router.post("/attempts/{attempt_id}/review-flashcards")
+    async def review_flashcards(attempt_id:str,http_request:Request,access=Depends(authorizer)):
+        attempt,scope,_=await owned_attempt(attempt_id,access)
+        if attempt["status"]!="SUBMITTED":
+            raise HTTPException(409,detail={"code":"attempt_not_submitted","message":"Attempt is not submitted."})
+        answers=await run_in_threadpool(repository.answers,attempt_id)
+        wrong={item["question_id"] for item in answers if not item["correct"]}
+        if not wrong:
+            return {"attempt_id":attempt_id,"status":"NO_REVIEW_NEEDED","flashcards":[]}
+        quiz=await run_in_threadpool(repository.quizzes.quiz,attempt["quiz_id"])
+        questions={item["question_id"]:item for item in quiz["questions"]}
+        grouped={}
+        for question_id in wrong:
+            question=questions.get(question_id); provenance=question.get("trusted_provenance") if question else None
+            bindings=provenance.get("bindings") if isinstance(provenance,dict) and provenance.get("version")==1 else None
+            chapters={item.get("chapter_id") for item in bindings or [] if isinstance(item,dict) and item.get("chapter_id")}
+            if not question or len(chapters)!=1:
+                raise HTTPException(409,detail={"code":"trusted_topic_mapping_unavailable","message":"Review material is unavailable."})
+            grouped.setdefault(next(iter(chapters)),[]).append(question)
+        reservation=await run_in_threadpool(repository.reserve_review_batch,attempt_id,scope,{"chapters":sorted(grouped)})
+        if reservation["status"]=="READY":
+            return {"attempt_id":attempt_id,"batch_id":reservation["batch_id"],"status":"READY","flashcards":[]}
+        if reservation["status"]=="PENDING" and not reservation.get("lease_id"):
+            return {"attempt_id":attempt_id,"batch_id":reservation["batch_id"],"status":"PENDING","flashcards":[]}
+        batch_cards=[]; chapters={}; payloads={}
+        existing_pairs=await run_in_threadpool(saved_flashcard_pairs,scope)
+        generation=LearningGenerationService(quizzes,cards,repository.quizzes,repository.evidence,
+            context_validator=lambda scoped,learning: publications.validate_learning_context(scoped,learning,access))
+        try:
+            for chapter,items in grouped.items():
+                async with trusted_question_context(publications,access,scope,items[0]) as context:
+                    learning=VerifiedPublicationService.learning_context(context)
+                    prepared=await generation.prepare_flashcards(learning.scope,learning,topic=chapter,count=5,difficulty="medium",
+                        existing_pairs=existing_pairs,
+                        correlation_id=getattr(http_request.state,"learning_correlation_id",uuid4().hex))
+                    for card in prepared["_cards"]:
+                        existing_pairs.add((" ".join(card.front_text.casefold().split()),
+                                            " ".join(card.back_text.casefold().split())))
+                        batch_cards.append(card); chapters[card.flashcard_id]=chapter; payloads[card.flashcard_id]={"context":context_payload(context)}
+            result=await run_in_threadpool(repository.publish_review_batch,reservation["batch_id"],reservation["lease_id"],scope,batch_cards,chapters,payloads)
+        except Exception:
+            await run_in_threadpool(repository.fail_review_batch,reservation["batch_id"],reservation["lease_id"],scope)
+            raise
+        return {"attempt_id":attempt_id,"batch_id":result["batch_id"],"status":result["status"],"flashcards":[
+            {"flashcard_id":card.flashcard_id,"front_text":card.front_text,"back_text":card.back_text,"topic":card.topic} for card in batch_cards]}
 
     @router.post("/courses/{course_id}/flashcards")
     async def generate_cards(course_id:str,request:GenerationInput,http_request:Request,access=Depends(authorizer)):
