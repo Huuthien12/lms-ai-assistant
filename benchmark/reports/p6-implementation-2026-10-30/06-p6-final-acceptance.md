@@ -36,6 +36,24 @@ The SQL fixture used only same-run `codex_acceptance_<uuid>` databases and perfo
 
 The Git candidate is limited to the P6 implementation files, focused tests/fake, SQL acceptance test, and this sanitized report. JUnit XML, virtual environments, runtime/test temporary directories, private evaluation material, `.env`, protected local credential artifacts, logs, and unrelated untracked artifacts are excluded. Final staged-diff and secret scan results are recorded after staging/commit.
 
+### Committed file allowlist
+
+- `lms-dlu-demo/learning_generation.py`
+- `lms-dlu-demo/quiz_lifecycle.py`
+- `lms-dlu-demo/verified_learning_repository.py`
+- `lms-dlu-demo/verified_learning_router.py`
+- `lms-dlu-demo/verified_learning_ui.py`
+- `tests/manual/sql_final_team_acceptance.py`
+- `tests/test_quiz_lifecycle.py`
+- `tests/test_verified_chat_integration.py`
+- `tests/test_verified_learning.py`
+- `tests/test_verified_learning_integration.py`
+- `tests/test_verified_learning_ui.py`
+- `tests/verified_learning_fakes.py`
+- this report
+
+The final staged scan found no API key, Moodle token, password, private key, or protected credential blob. The implementation commit is `5304a8f9e6a87edf6dc5b9ae72abebcbbdf46291` on `feature/deeptutor-verified-p6-final-20261030`; it was pushed normally and verified against the matching origin SHA. No tracked or staged files remained after publication. Existing unrelated untracked files remain deliberately untouched.
+
 ## Pending separate operational gate
 
 Production schema deployment and live Moodle acceptance are intentionally not performed by this change. They remain deployment approval work, not a source or feature-branch blocker.
@@ -46,6 +64,6 @@ Production schema deployment and live Moodle acceptance are intentionally not pe
 - P6 AUTOMATED/HTTP: PASS
 - P6 REAL SQL: PASS
 - P6 UI: PASS
-- P6 SECURITY AUDIT: PENDING FINAL STAGED SCAN
-- P6 FEATURE PUSH: PENDING FINAL STAGED REVIEW
+- P6 SECURITY AUDIT: PASS
+- P6 FEATURE PUSH: PASS
 - P6 LIVE ACCEPTANCE: PENDING DEPLOYMENT APPROVAL
