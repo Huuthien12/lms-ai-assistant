@@ -52,6 +52,26 @@ class RecommendationService:
             "recommended_actions": actions, "deadline": deadline,
         }
 
+    def rank_rule_first(self, snapshots: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Stable, provider-free ordering for authorized mastery snapshots."""
+        unique = {}
+        for snapshot in snapshots:
+            result=self._evaluate_rule_first(snapshot)
+            unique.setdefault(result["topic"],result)
+        def key(item):
+            score=item["mastery_score"]
+            tier=(0 if score is not None and item["confidence"] != "LOW" and score < 50 else
+                  1 if score is not None and item["confidence"] != "LOW" and score < 70 else
+                  2 if item["level"] == "INSUFFICIENT_EVIDENCE" else 3)
+            return (tier, float(score) if score is not None else 101.0, item["topic"].casefold())
+        ranked=sorted(unique.values(),key=key)
+        for rank,item in enumerate(ranked,1):
+            item["rank"]=rank
+            item["reason"]=("Chưa đủ bằng chứng học tập đáng tin cậy." if item["level"] == "INSUFFICIENT_EVIDENCE" else
+                            "Kết quả học tập ở chủ đề này cần được ưu tiên ôn lại." if item["level"] in {"WEAK","DEVELOPING"} else
+                            "Có thể tiếp tục luyện tập theo mức hiện tại.")
+        return ranked
+
     async def get_recommendations(
         self, topic_mastery: Dict[str, Any], available_courses_or_topics: List[str],
         deadline: Optional[str] = None, **kwargs: Any,

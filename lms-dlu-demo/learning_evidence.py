@@ -115,10 +115,15 @@ class LearningEvidenceRepository:
             except Exception:
                 conn.rollback(); raise ValueError("persistence_failure") from None
 
-    def record_quiz(self, cursor: Any, *, attempt_id: str, student_id: str, course_id: str, topic: str, results: list[dict[str, Any]]) -> None:
+    def record_quiz(self, cursor: Any, *, attempt_id: str, student_id: str, course_id: str, topic: str,
+                    results: list[dict[str, Any]], topic_by_question: dict[str, str] | None = None) -> None:
+        topic_by_question=topic_by_question or {}
+        affected=set()
         for result in results:
-            cursor.execute("INSERT INTO dbo.LearningEvents (event_id, student_id, course_id, topic, event_type, source_id, correct, rating, created_at) VALUES (?, ?, ?, ?, 'QUIZ_ANSWER', ?, ?, NULL, ?)", str(uuid.uuid4()), student_id, course_id, topic, f"{attempt_id}:{result['question_id']}", result["correct"], _now())
-        self._recompute(cursor, student_id, course_id, topic)
+            event_topic=topic_by_question.get(result["question_id"],topic)
+            cursor.execute("INSERT INTO dbo.LearningEvents (event_id, student_id, course_id, topic, event_type, source_id, correct, rating, created_at) VALUES (?, ?, ?, ?, 'QUIZ_ANSWER', ?, ?, NULL, ?)", str(uuid.uuid4()), student_id, course_id, event_topic, f"{attempt_id}:{result['question_id']}", result["correct"], _now())
+            affected.add(event_topic)
+        for event_topic in sorted(affected): self._recompute(cursor, student_id, course_id, event_topic)
 
     def flashcard(self, flashcard_id: str, scope: LearningScope) -> dict[str, Any]:
         with self.connect() as conn:
@@ -182,7 +187,7 @@ class LearningEvidenceRepository:
 
     def mastery_for(self, student_id: str, course_id: str, topic: str | None = None) -> list[dict[str, Any]]:
         with self.connect() as conn:
-            sql = "SELECT topic, mastery_score, mastery_level, confidence_level, evidence_count, last_updated_at FROM dbo.TopicMastery WHERE student_id=? AND course_id=?" + (" AND topic=?" if topic else "")
+            sql = "SELECT topic, mastery_score, mastery_level, confidence_level, evidence_count, last_updated_at FROM dbo.TopicMastery WHERE student_id=? AND course_id=?" + (" AND topic=?" if topic else " ORDER BY topic ASC")
             rows = conn.cursor().execute(sql, student_id, course_id, *([topic] if topic else [])).fetchall()
         if not rows:
             if topic:

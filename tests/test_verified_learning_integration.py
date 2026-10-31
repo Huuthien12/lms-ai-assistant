@@ -140,6 +140,21 @@ def test_post_quiz_review_flashcards_all_correct_skips_provider(learning):
     orch.generate.assert_not_awaited()
 
 
+def test_progress_recommendations_are_authenticated_ranked_and_public_safe(learning):
+    client,_,_,_,_,_=learning
+    empty=client.get("/learning/courses/INT1339/recommendations",headers=headers())
+    assert empty.status_code==200 and empty.json()["recommendations"]==[]
+    quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).json()
+    attempt=client.post(f"/learning/quizzes/{quiz['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[{"question_id":quiz["questions"][0]["question_id"],"selected_option_id":"B"}]})
+    response=client.get("/learning/courses/INT1339/recommendations?owner_ref=forged&mastery_score=100",headers=headers())
+    assert response.status_code==200
+    body=response.json(); assert body["mastery_policy"]["version"]=="p1-80-20-v1"
+    assert body["recommendations"][0]["rank"]==1 and body["recommendations"][0]["level"]=="INSUFFICIENT_EVIDENCE"
+    assert "correct_option_id" not in response.text and "answer_key" not in response.text
+    assert client.get("/learning/courses/INT1339/recommendations",headers=headers("B")).status_code==403
+
+
 def test_post_quiz_review_flashcards_denies_foreign_owner_and_unsubmitted_attempt(learning):
     client,_,_,_,_,_=learning
     quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).json()

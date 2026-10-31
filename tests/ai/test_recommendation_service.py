@@ -228,6 +228,19 @@ def test_only_orchestrator_ai_dependency():
     assert ai_imports == ["backend.services.ai.orchestrator"]
 
 
+def test_rank_rule_first_prioritizes_real_weakness_and_breaks_ties_by_topic(orch):
+    ranked=RecommendationService(orch).rank_rule_first([
+        mastery(topic="Zulu",mastery_score=40,evidence_count=7,confidence="MEDIUM"),
+        mastery(topic="Alpha",mastery_score=40,evidence_count=7,confidence="MEDIUM"),
+        mastery(topic="Unknown",mastery_score=None,evidence_count=0,confidence="LOW"),
+        mastery(topic="Strong",mastery_score=90,evidence_count=15,confidence="HIGH"),
+    ])
+    assert [item["topic"] for item in ranked]==["Alpha","Zulu","Unknown","Strong"]
+    assert [item["rank"] for item in ranked]==[1,2,3,4]
+    assert ranked[0]["reason"] == "Kết quả học tập ở chủ đề này cần được ưu tiên ôn lại."
+    assert ranked[2]["reason"] == "Chưa đủ bằng chứng học tập đáng tin cậy."
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("key,value", [
     ("topic", "Fake topic"), ("mastery_score", 100), ("confidence", "HIGH"),

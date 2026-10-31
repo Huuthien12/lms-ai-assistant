@@ -156,6 +156,9 @@ def render_progress_dashboard(result):
                 labels = [progress_label(_ACTION_LABELS, action) for action in actions if isinstance(action, str)]
                 if labels:
                     st.info("Gợi ý ôn tập: " + " • ".join(labels))
+            recommendation=next((item for item in recommendations if item.get("topic")==topic.get("topic")),None)
+            if isinstance(recommendation,dict) and isinstance(recommendation.get("reason"),str):
+                st.caption(recommendation["reason"] + " Dùng các tab Quiz hoặc Flashcards để thực hiện gợi ý.")
 
 
 def scope_control(prefix,chapters):

@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).parents[1] / "lms-dlu-demo"))
 from quiz_lifecycle import (  # noqa: E402
     QuizDefinitionRequest, QuizRepository, StartAttemptRequest, _trusted_questions,
-    _validate_answers, _public_submission_result, create_quiz_router,
+    _validate_answers, _public_submission_result, _verified_chapter_topics, create_quiz_router,
 )
 from backend.services.ai.learning_context import LearningScope, LearningSource, VerifiedLearningContext
 SCOPE = LearningScope(owner_id="student-1", course_id="course-1")
@@ -123,6 +123,15 @@ def test_trusted_definition_binds_question_to_verified_chapter_provenance():
     assert trusted[0]["trusted_provenance"] == {"version":1,"bindings":[
         {"source_id":"verified-source","chapter_id":"chapter-a","version":"v1","content_hash":"hash"}]}
     assert "trusted_provenance" not in QuizService.to_public_result({"questions":trusted})["questions"][0]
+
+
+def test_only_unambiguous_trusted_provenance_becomes_a_chapter_topic():
+    questions=[
+        {"question_id":"good","trusted_provenance":{"version":1,"bindings":[{"chapter_id":"chapter-a"}]}},
+        {"question_id":"legacy"},
+        {"question_id":"ambiguous","trusted_provenance":{"version":1,"bindings":[{"chapter_id":"a"},{"chapter_id":"b"}]}},
+    ]
+    assert _verified_chapter_topics(questions)=={"good":"chapter-a"}
 
 
 def test_trusted_definition_without_verified_binding_stays_p5_compatible_but_p6_ineligible():

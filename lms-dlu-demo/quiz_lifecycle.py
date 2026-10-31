@@ -190,7 +190,8 @@ class QuizRepository:
                 for result in graded["results"]:
                     cursor.execute("INSERT INTO dbo.QuizAnswers (attempt_id, question_id, selected_option_id, correct) VALUES (?, ?, ?, ?)", attempt_id, result["question_id"], result["selected_option_id"], result["correct"])
                 if self.evidence is not None:
-                    self.evidence.record_quiz(cursor, attempt_id=attempt_id, student_id=row[2], course_id=row[3], topic=quiz["topic"], results=graded["results"])
+                    self.evidence.record_quiz(cursor, attempt_id=attempt_id, student_id=row[2], course_id=row[3], topic=quiz["topic"], results=graded["results"],
+                                              topic_by_question=_verified_chapter_topics(quiz["questions"]))
                 cursor.execute("UPDATE dbo.QuizAttempts SET status='SUBMITTED', submitted_at=? WHERE attempt_id=? AND status='IN_PROGRESS'", now, attempt_id)
                 if cursor.rowcount != 1:
                     raise ValueError("already_submitted")
@@ -311,6 +312,17 @@ def _trusted_provenance(question: dict[str, Any],
     unique={binding["source_id"]:binding for binding in bindings}
     return {"version":TRUSTED_QUESTION_PROVENANCE_VERSION,
             "bindings":[unique[key] for key in sorted(unique)]}
+
+
+def _verified_chapter_topics(questions: list[dict[str, Any]]) -> dict[str, str]:
+    """Use a chapter only when persisted P6 provenance has one exact binding."""
+    result={}
+    for question in questions:
+        provenance=question.get("trusted_provenance") if isinstance(question,dict) else None
+        bindings=provenance.get("bindings") if isinstance(provenance,dict) and provenance.get("version")==TRUSTED_QUESTION_PROVENANCE_VERSION else []
+        chapters={item.get("chapter_id") for item in bindings if isinstance(item,dict) and isinstance(item.get("chapter_id"),str) and item["chapter_id"].strip()}
+        if len(chapters)==1 and isinstance(question.get("question_id"),str): result[question["question_id"]]=next(iter(chapters))
+    return result
 
 
 def _validate_answers(questions: list[dict[str, Any]], answers: list[dict[str, Any]]) -> None:

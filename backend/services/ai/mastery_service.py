@@ -7,6 +7,16 @@ class MasteryService:
     Scope strings are compared exactly, without normalization. This service has
     no provider, retrieval, or persistence dependency and never mutates evidence.
     """
+    POLICY_VERSION = "p1-80-20-v1"
+
+    @classmethod
+    def policy_metadata(cls) -> Dict[str, Any]:
+        return {"version": cls.POLICY_VERSION, "quiz_weight": 0.8,
+                "flashcard_weight": 0.2,
+                "flashcard_ratings": {"AGAIN": 0.0, "HARD": 0.4, "GOOD": 0.75, "EASY": 1.0},
+                "levels": {"WEAK": [0, 49.99], "DEVELOPING": [50, 69.99],
+                           "GOOD": [70, 84.99], "MASTERED": [85, 100]},
+                "confidence": {"LOW": "<5", "MEDIUM": "5-14", "HIGH": ">=15"}}
 
     @staticmethod
     def _level(score: float) -> str:
