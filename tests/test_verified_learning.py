@@ -24,8 +24,8 @@ from learning_generation import LearningGenerationService
 
 def context():
     return VerifiedLearningContext(
-        scope=SCOPE, kb_id="server-kb", retrieval_id="retrieval-1", text="One is A.",
-        sources=(LearningSource(source_id="source-1", chunk_id="chunk-1", version="v1"),),
+        scope=SCOPE, kb_id="server-kb", retrieval_id="retrieval-1", text="[source-1]\nPython is a language.",
+        sources=(LearningSource(source_id="source-1", chunk_id="chunk-1", document_id="chapter-1", version="v1", content_hash="a" * 64, provenance_status="verified"),),
     )
 
 
@@ -69,8 +69,11 @@ def composition():
     provider = Mock()
     grounded_questions = copy.deepcopy(QUESTIONS)
     grounded_questions[0].update(
-        question=QuizService.GROUNDING_QUESTION_PREFIX + "One is ____.",
-        grounding_evidence="One is A.",
+        question="Nội dung nào được nêu trong tài liệu đã xác minh?",
+        options=[{"id": "A", "text": "is"}, {"id": "B", "text": "Python"},
+                 {"id": "C", "text": "Java"}, {"id": "D", "text": "C"}],
+        correct_option_id="A",
+        evidence_id="e1", answer_span_id="a1",
     )
     provider.generate = AsyncMock(return_value=LLMResult(
         "success", "test", "test", json.dumps({"questions": grounded_questions}), 0))
@@ -91,7 +94,7 @@ def assert_public(value):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("selected,score", [("a", 100), ("b", 0), (None, 0)])
+@pytest.mark.parametrize("selected,score", [("A", 100), ("B", 0), (None, 0)])
 async def test_generate_persist_submit_evidence_mastery_and_review(selected, score):
     state, provider, gen, quizzes, evidence, workflow = composition()
     public = await gen.generate_quiz(SCOPE, context(), topic="topic", question_count=1, difficulty="easy")
@@ -109,10 +112,10 @@ async def test_generate_persist_submit_evidence_mastery_and_review(selected, sco
     assert provider.generate.await_count == calls  # No LLM grading/review call.
     assert evidence.mastery_for(SCOPE.owner_id, SCOPE.course_id)[0]["mastery_score"] == score
     review = workflow.review(attempt["attempt_id"], SCOPE.owner_id, scope=SCOPE)
-    if selected != "a":
+    if selected != "A":
         assert review["results"][0]["explanation_status"] == "available"
         assert review["results"][0]["sources"] == context().source_metadata()
-        assert review["results"][0]["sources"][0]["provenance_status"] == "unverified"
+        assert review["results"][0]["sources"][0]["provenance_status"] == "verified"
     with pytest.raises(ValueError, match="already_submitted"):
         quizzes.submit(attempt["attempt_id"], [], GradingService(), scope=SCOPE)
     assert len(state["events"]) == 1

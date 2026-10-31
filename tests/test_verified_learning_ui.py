@@ -76,6 +76,7 @@ def test_authenticated_streamlit_chat_quiz_grade_progress_and_logout(ui):
     assert not ui.json
     assert any(m.label=="Mức độ thành thạo" for m in ui.metric)
     assert any("Gợi ý ôn tập" in item.value for item in ui.info)
+    assert any("Dùng các tab Quiz hoặc Flashcards" in item.value for item in ui.caption)
     button(ui,"Đăng xuất").click().run()
     assert not ui.exception and len(ui.selectbox)==0
     with pytest.raises(KeyError): ui.session_state["verified_session"]

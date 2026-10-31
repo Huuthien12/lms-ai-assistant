@@ -514,7 +514,19 @@ def create_verified_learning_router(authorizer,publications,repository,orchestra
             topics=[]
         # Rule recommendations use server evidence only; no extra generation or ML claim.
         return {"owner_ref":scope.owner_ref,"course_id":scope.course_key,"topics":topics,
-                "recommendations":[recommendations._evaluate_rule_first(topic) for topic in topics],
-                "mastery_model":"heuristic/rule-based"}
+                "recommendations":recommendations.rank_rule_first(topics),
+                "mastery_model":"heuristic/rule-based",
+                "mastery_policy":repository.evidence.mastery.policy_metadata()}
+
+    @router.get("/courses/{course_id}/recommendations")
+    def recommendation(course_id:str,access=Depends(authorizer)):
+        scope=access.scope(course_id)
+        try: topics=repository.evidence.mastery_for(scope.owner_ref,scope.course_key)
+        except ValueError as error:
+            if str(error)!="mastery_not_found": raise
+            topics=[]
+        return {"owner_ref":scope.owner_ref,"course_id":scope.course_key,
+                "recommendations":recommendations.rank_rule_first(topics),
+                "mastery_policy":repository.evidence.mastery.policy_metadata()}
 
     return router
