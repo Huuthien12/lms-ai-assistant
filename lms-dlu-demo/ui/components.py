@@ -27,6 +27,46 @@ def role_label(role: str) -> str:
     return "Giảng viên" if role == "teacher" else "Sinh viên"
 
 
+def render_verified_topbar(st, course_name: str) -> None:
+    """Render a presentation-only authenticated shell without exposing identity IDs."""
+    st.markdown(
+        f"""
+        <div class="verified-topbar">
+          <div><span class="verified-topbar-kicker">DEEPTUTOR VERIFIED</span>
+          <strong>{escape(course_name)}</strong></div>
+          <span class="verified-session-status">● Phiên Moodle đã xác minh</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_learning_tab_header(st, title: str, description: str, status: str = "") -> None:
+    """Keep each verified workspace task anchored in real, learner-facing language."""
+    badge = f"<span>{escape(status)}</span>" if status else ""
+    st.markdown(
+        f"""
+        <div class="learning-tab-header">
+          <div><p>KHÔNG GIAN HỌC TẬP</p><h2>{escape(title)}</h2><small>{escape(description)}</small></div>
+          {badge}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_verified_empty_state(st, title: str, message: str) -> None:
+    """Show a bounded, truthful empty state without inventing learner data."""
+    st.markdown(
+        f"""
+        <div class="verified-empty-state">
+          <span aria-hidden="true">○</span><h3>{escape(title)}</h3><p>{escape(message)}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_topbar(st, *, title: str, user_name: str, role: str, user_id: str = "") -> None:
     initial = escape((user_name or "?")[0].upper())
     st.markdown(
@@ -78,9 +118,14 @@ def render_student_courses_hero(st, course_count: int) -> None:
 def render_verified_dashboard(st, courses: list[dict[str, Any]], selected_course: str | None = None,
                               on_select=None) -> None:
     """Render authorized courses as controls backed by the caller's selection callback."""
+    # The sidebar and top bar already identify a sole authorized course; repeating a selector wastes
+    # the first viewport of each learning task.
+    if len(courses) == 1 and str(courses[0].get("course_key", "")) == selected_course:
+        return
     st.markdown(
         "<div class='verified-dashboard-header'><div><p>KHÔNG GIAN HỌC TẬP</p>"
-        "<h1>Tổng quan học tập</h1>"
+        "<h1>Không gian học tập</h1>"
+        "<span>Chọn một học phần được Moodle cấp quyền để tiếp tục.</span>"
         f"</div><strong>{len(courses)} khóa học</strong></div>",
         unsafe_allow_html=True,
     )

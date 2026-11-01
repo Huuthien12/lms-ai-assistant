@@ -17,7 +17,7 @@ def inject_theme(st) -> None:
     st.markdown(
         f"""
         <style>
-        .stApp {{ background:linear-gradient(180deg,#F8FAFF 0,#F5F7FB 28rem); color: {TEXT_PRIMARY}; }}
+        .stApp {{ background:linear-gradient(180deg,#F8FBFF 0,#F5F8FC 28rem); color: {TEXT_PRIMARY}; }}
         .block-container {{ max-width:1280px; padding:1.75rem 2rem 2.5rem; }}
         h1,h2,h3 {{ letter-spacing:-.02em; }}
         .lms-topbar {{ display:flex; justify-content:space-between; align-items:center;
@@ -49,7 +49,7 @@ def inject_theme(st) -> None:
         .section-green-title {{ color:{PRIMARY_DARK} !important; border-bottom-color:{PRIMARY} !important; }}
         .deeptutor-box {{ background:{PRIMARY_LIGHT} !important; border-left-color:{PRIMARY} !important; }}
         [data-testid="stSidebar"] {{ background:linear-gradient(160deg,#063b78,#002a5c 72%,#001d44); border-right:0; }}
-        @media (min-width:851px) {{ [data-testid="stSidebar"][aria-expanded="true"] {{ position:sticky !important; top:0; align-self:flex-start; min-width:250px !important; width:250px !important; height:100vh !important; }} [data-testid="stSidebar"][aria-expanded="true"] > div:first-child {{ min-width:250px !important; width:250px !important; height:100vh !important; }} }}
+        @media (min-width:851px) {{ [data-testid="stSidebar"][aria-expanded="true"] {{ position:sticky !important; top:0; align-self:flex-start; min-width:240px !important; width:240px !important; height:100vh !important; }} [data-testid="stSidebar"][aria-expanded="true"] > div:first-child {{ min-width:240px !important; width:240px !important; height:100vh !important; }} }}
         [data-testid="stSidebarContent"] {{ position:relative; height:100%; display:flex; flex-direction:column; }}
         [data-testid="stSidebarUserContent"] {{ min-height:0; flex:1; padding:1.2rem .8rem 1rem; }}
         [data-testid="stSidebar"] .st-key-sidebar_bottom_actions {{ position:absolute; right:.8rem; bottom:1rem; left:.8rem; }}
@@ -70,19 +70,32 @@ def inject_theme(st) -> None:
         [data-testid="stSidebar"] .stButton button[kind="primary"] {{ background:#087df5; color:#fff; border:0; box-shadow:0 6px 18px rgba(0,0,0,.12); }}
         [data-testid="stSidebar"] .stButton button[kind="primary"]:hover {{ background:#168cff; color:#fff; transform:none; }}
         [data-testid="stSidebar"] .st-key-sidebar_logout button:hover {{ background:#FEF2F2; color:{ERROR}; }}
-        .stButton > button[kind="primary"] {{ background:{PRIMARY}; border-color:{PRIMARY}; }}
-        .stButton > button[kind="primary"]:hover {{ background:{PRIMARY_DARK}; border-color:{PRIMARY_DARK}; }}
+        [data-testid="stBaseButton-primary"], [data-testid="stBaseButton-primaryFormSubmit"] {{ background:{PRIMARY} !important; border-color:{PRIMARY} !important; color:#fff !important; }}
+        [data-testid="stBaseButton-primary"]:hover, [data-testid="stBaseButton-primaryFormSubmit"]:hover {{ background:{PRIMARY_DARK} !important; border-color:{PRIMARY_DARK} !important; color:#fff !important; }}
         .student-welcome {{ min-height:190px; display:flex; align-items:center; justify-content:space-between; overflow:hidden;
           border-radius:20px; padding:1.7rem 2rem; color:#fff; background:linear-gradient(115deg,{PRIMARY_DARK},#1976D2 62%,#42A5F5); box-shadow:0 12px 24px rgba(21,101,192,.18); }}
         .student-welcome span {{ font-size:.8rem; opacity:.85; }} .student-welcome h1 {{ margin:.35rem 0; color:#fff; font-size:1.8rem; }}
         .student-welcome p {{ margin:0; opacity:.9; }} .welcome-orbit {{ width:112px; height:112px; display:grid; place-items:center; border:1px solid rgba(255,255,255,.3); border-radius:50%; font-size:2rem; transform:rotate(-12deg); }}
         .welcome-orbit span {{ font-size:3.2rem; opacity:.35; }}
-        .verified-dashboard-header {{ display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:.85rem 1.1rem;
+        .verified-topbar {{ display:flex; align-items:center; justify-content:space-between; gap:1rem; min-height:58px; padding:.7rem 0 1rem; margin-bottom:.55rem; border-bottom:1px solid #DCE6F5; }}
+        .verified-topbar-kicker {{ display:block; color:#4F46E5; font-size:.68rem; font-weight:800; letter-spacing:.11em; }}
+        .verified-topbar strong {{ display:block; margin-top:.12rem; color:#0F2453; font-size:1rem; overflow-wrap:anywhere; }}
+        .verified-session-status {{ flex:none; border:1px solid #BBF7D0; border-radius:999px; padding:.38rem .66rem; color:#166534; background:#F0FDF4; font-size:.78rem; font-weight:700; white-space:nowrap; }}
+        .verified-dashboard-header {{ display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:1rem 1.15rem;
           margin:0 0 .75rem; border:1px solid #D9E4FF; border-radius:14px; background:#FFFFFF; }}
         .verified-dashboard-header p {{ margin:0 0 .35rem; color:#4F46E5; font-size:.72rem; font-weight:800; letter-spacing:.09em; }}
         .verified-dashboard-header h1 {{ margin:0; color:#172554; font-size:1.25rem; }}
         .verified-dashboard-header span {{ display:block; margin-top:.45rem; color:#587095; }}
         .verified-dashboard-header strong {{ flex:none; color:#3730A3; background:#E0E7FF; border-radius:999px; padding:.5rem .8rem; font-size:.85rem; }}
+        .learning-tab-header {{ display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; margin:.4rem 0 1rem; padding:1.15rem 1.2rem; border:1px solid #D9E4FF; border-radius:16px; background:linear-gradient(110deg,#FFFFFF,#F0F6FF); }}
+        .learning-tab-header p {{ margin:0 0 .3rem; color:#4F46E5; font-size:.72rem; font-weight:800; letter-spacing:.09em; }}
+        .learning-tab-header h2 {{ margin:0; color:#102A55; font-size:1.45rem; }} .learning-tab-header small {{ display:block; max-width:46rem; margin-top:.35rem; color:#587095; font-size:.9rem; line-height:1.5; }}
+        .learning-tab-header > span {{ flex:none; border-radius:999px; padding:.38rem .66rem; background:#E0E7FF; color:#3730A3; font-size:.78rem; font-weight:750; white-space:nowrap; }}
+        .verified-empty-state {{ display:grid; place-items:center; gap:.45rem; min-height:154px; margin:.75rem 0; padding:1.4rem; border:1px dashed #B9CBE6; border-radius:16px; color:#526B8A; background:#FBFDFF; text-align:center; }}
+        .verified-empty-state > span {{ display:grid; place-items:center; width:34px; height:34px; border:1px solid #C8D9F0; border-radius:50%; color:#1565C0; font-size:1.3rem; }}
+        .verified-empty-state h3 {{ margin:0; color:#102A55; font-size:1rem; }} .verified-empty-state p {{ max-width:34rem; margin:0; line-height:1.5; }}
+        .flashcard-study {{ min-height:150px; display:grid; align-content:center; gap:.7rem; padding:1.35rem 1.5rem; border:1px solid #DCE6F5; border-radius:16px; background:linear-gradient(135deg,#FFFFFF,#EEF6FF); text-align:center; }}
+        .flashcard-study span {{ color:#4F46E5; font-size:.7rem; font-weight:800; letter-spacing:.1em; }} .flashcard-study h3 {{ margin:0; color:#102A55; font-size:1.35rem; }} .flashcard-study.answer {{ min-height:auto; margin-top:.8rem; background:#fff; }} .flashcard-study.answer p {{ margin:0; color:#334155; line-height:1.55; }}
         [class*="st-key-course_card_"] {{ padding:.35rem; border:1px solid #DCE6F5; border-radius:15px; background:#fff;
           box-shadow:0 2px 10px rgba(15,23,42,.045); transition:transform 160ms ease,box-shadow 160ms ease,border-color 160ms ease; }}
         [class*="st-key-course_card_"]:hover {{ transform:translateY(-2px); border-color:#A5B4FC; box-shadow:0 10px 24px rgba(49,46,129,.10); }}
@@ -101,11 +114,15 @@ def inject_theme(st) -> None:
         .document-publication-card h3 {{ overflow-wrap:anywhere; margin:.28rem 0; color:#172554; font-size:1rem; }}
         .document-publication-card p {{ overflow-wrap:anywhere; margin:0; color:#64748B; font-size:.78rem; line-height:1.45; }}
         .document-publication-status {{ flex:none; color:#166534; background:#DCFCE7; border-radius:999px; padding:.3rem .55rem; font-size:.73rem; font-weight:750; }}
-        .login-shell {{ max-width:540px; margin:5vh auto 1.35rem; padding:2rem; border:1px solid #D9E4FF; border-radius:22px; background:linear-gradient(135deg,#FFFFFF,#EEF2FF); box-shadow:0 18px 42px rgba(30,41,59,.10); }}
+        .login-shell {{ max-width:540px; margin:5vh auto 1.35rem; padding:2rem; border:1px solid #D9E4FF; border-radius:22px; background:linear-gradient(135deg,#FFFFFF,#EEF6FF); box-shadow:0 18px 42px rgba(30,41,59,.10); }}
         .login-brand {{ display:flex; align-items:center; gap:.55rem; color:#4338CA; font-size:1.1rem; font-weight:800; }}
         .login-shell p {{ margin:1.8rem 0 .45rem; color:#4F46E5; font-size:.72rem; font-weight:800; letter-spacing:.1em; }}
         .login-shell h1 {{ margin:0; color:#172554; font-size:2rem; }}
         .login-shell > span {{ display:block; margin-top:.65rem; color:#64748B; line-height:1.55; }}
+        [data-testid="stExpander"], [data-testid="stForm"]:has([class*="st-key-moodle_login_token"]) {{ max-width:540px; margin-left:auto; margin-right:auto; }}
+        [data-testid="stForm"] {{ padding:1.25rem; border-radius:16px; border-color:#D9E4FF; background:#fff; }}
+        [data-testid="stForm"]:has([class*="st-key-quiz_answer_"]) {{ max-width:760px; margin-left:auto; margin-right:auto; }}
+        [data-testid="stForm"] [data-testid="stTextInput"] input {{ min-height:44px; }}
         [data-testid="stTabs"] {{ margin-top:1.5rem; }}
         [data-testid="stTabs"] [role="tablist"] {{ gap:.25rem; border-bottom:1px solid #DCE6F5; }}
         [data-testid="stTabs"] [role="tab"] {{ height:42px; padding:0 .9rem; color:#64748B; font-weight:650; }}
@@ -149,7 +166,16 @@ def inject_theme(st) -> None:
         .status-badge.success {{ background:#DCFCE7; color:#15803D; }} .status-badge.warning {{ background:#FEF3C7; color:#B45309; }} .status-badge.error {{ background:#FEE2E2; color:#B91C1C; }} .status-badge.muted {{ background:#E8EEF7; color:#53657D; }}
         .lms-empty {{ min-height:230px; display:grid; place-content:center; gap:.45rem; text-align:center; padding:2rem; }} .lms-empty h3 {{ margin:0; color:#071B4D; }} .lms-empty p {{ margin:0; }} .state-icon {{ width:72px; height:72px; margin:auto; display:grid; place-items:center; border-radius:22px; background:#E7F1FF; color:{PRIMARY}; font-size:2rem; }} .error-state .state-icon {{ background:#FEE2E2; color:{ERROR}; }}
         [data-testid="stRadio"] > div {{ gap:.45rem; flex-wrap:wrap; }} [data-testid="stRadio"] label {{ background:{SURFACE}; border:1px solid #D7E2F2; border-radius:999px; padding:.35rem .7rem; color:#405675; }} [data-testid="stRadio"] label:has(input:checked) {{ background:{PRIMARY_LIGHT}; border-color:{PRIMARY}; color:{PRIMARY_DARK}; font-weight:700; }}
-        @media (max-width: 850px) {{ .block-container {{ padding:1rem 1rem 2rem; }} [data-testid="stSidebar"], [data-testid="stSidebar"] > div:first-child {{ min-width:auto !important; width:auto !important; }} [data-testid="stSidebarCollapsedControl"] {{ display:flex !important; }} .metric-card {{ flex-direction:column; }} .metric-item + .metric-item {{ border-left:0; border-top:1px solid #E2E8F0; }} .student-welcome {{ padding:1.35rem; }} .verified-dashboard-header,.document-workspace-header {{ align-items:flex-start; flex-direction:column; }} .document-publication-card {{ flex-wrap:wrap; }} .document-publication-status {{ margin-left:46px; }} .login-shell {{ margin:1rem 0; padding:1.35rem; }} .login-shell h1 {{ font-size:1.55rem; }} [data-testid="stTabs"] [role="tab"] {{ padding:0 .55rem; font-size:.82rem; }} }}
+        [class*="st-key-quiz_answer_"], [class*="st-key-card_review_"] {{ width:100% !important; }}
+        [class*="st-key-quiz_answer_"] [data-testid="stRadio"], [class*="st-key-quiz_answer_"] [data-testid="stRadioGroup"] {{ width:100%; }}
+        [class*="st-key-quiz_answer_"] [data-testid="stRadioGroup"] {{ display:grid; gap:.6rem; }}
+        [class*="st-key-quiz_answer_"] [data-testid="stRadioOption"] {{ min-height:48px; width:100%; box-sizing:border-box; align-items:center; border-radius:12px; padding:.7rem .9rem; }}
+        [class*="st-key-card_review_"] [data-testid="stRadioGroup"] {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:.5rem; width:100%; }}
+        [class*="st-key-card_review_"] [data-testid="stRadio"] label {{ min-height:44px; justify-content:center; padding:.55rem .35rem; text-align:center; white-space:nowrap; }}
+        [data-testid="stRadio"] label:has(input:focus-visible) {{ outline:3px solid rgba(21,101,192,.38); outline-offset:2px; }}
+        @media (prefers-reduced-motion: reduce) {{ *,*::before,*::after {{ scroll-behavior:auto !important; transition-duration:0.01ms !important; animation-duration:0.01ms !important; }} }}
+        @media (max-width: 850px) {{ .block-container {{ padding:1rem 1rem 2rem; }} [data-testid="stSidebar"], [data-testid="stSidebar"] > div:first-child {{ min-width:auto !important; width:auto !important; }} [data-testid="stSidebarCollapsedControl"] {{ display:flex !important; }} .metric-card {{ flex-direction:column; }} .metric-item + .metric-item {{ border-left:0; border-top:1px solid #E2E8F0; }} .student-welcome {{ padding:1.35rem; }} .verified-topbar,.verified-dashboard-header,.learning-tab-header,.document-workspace-header {{ align-items:flex-start; flex-direction:column; }} .verified-session-status {{ white-space:normal; }} .learning-tab-header > span {{ white-space:normal; }} .document-publication-card {{ flex-wrap:wrap; }} .document-publication-status {{ margin-left:46px; }} .login-shell {{ margin:1rem 0; padding:1.35rem; }} .login-shell h1 {{ font-size:1.55rem; }} [data-testid="stTabs"] [role="tab"] {{ padding:0 .55rem; font-size:.82rem; }} }}
+        @media (max-width: 640px) {{ [class*="st-key-card_review_"] [data-testid="stRadio"] > div {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} }}
         </style>
         """,
         unsafe_allow_html=True,

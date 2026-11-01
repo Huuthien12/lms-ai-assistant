@@ -266,6 +266,21 @@ def create_verified_learning_router(authorizer,publications,repository,orchestra
         published=publications.documents(scope)
         return {"course_id":scope.course_key,"resources":[],"publications":published}
 
+    @router.get("/courses/{course_id}/overview")
+    def overview(course_id:str,access=Depends(authorizer)):
+        """Course-scoped facts only; never expose another learner's activity."""
+        scope=access.scope(course_id)
+        can_manage_documents=False
+        if access.boundary.capability_evidence is not None:
+            try:
+                access.scope(course_id,action=CourseAction.SYNC_COURSE_RESOURCE)
+                can_manage_documents=True
+            except HTTPException:
+                pass
+        return {"course_id":scope.course_key,
+                "active_publication_count":len(publications.documents(scope)),
+                "can_manage_documents":can_manage_documents}
+
     @router.get("/courses/{course_id}/resources")
     def resources(course_id:str,access=Depends(authorizer)):
         return {"resources":moodle.resources(access,course_id)}

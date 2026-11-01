@@ -7,8 +7,8 @@ import pytest
 from streamlit.testing.v1 import AppTest
 from deeptutor_client import RealDeepTutorClient, BackendRequestError
 from verified_learning_ui import (VerifiedSession, display_quiz_text, progress_label, progress_percent,
-                                  progress_updated_at, session_messages)
-from ui.components import course_display_name, quiz_document_titles
+                                  progress_updated_at, session_messages, clear_scoped_work_state)
+from ui.components import course_display_name, quiz_document_titles, render_verified_dashboard, render_verified_empty_state, render_verified_topbar
 from test_verified_learning_integration import learning, runtime
 
 
@@ -41,6 +41,8 @@ def test_authenticated_streamlit_chat_quiz_grade_progress_and_logout(ui):
     login(ui)
     assert next(item for item in ui.selectbox if item.label=="Khóa học của tôi").options==["Lập trình Python"]
     assert ui.session_state["verified_course"]=="INT1339"
+    assert any(metric.label=="Tài liệu ACTIVE" and metric.value=="1" for metric in ui.metric)
+    assert any(input.label=="Mã người dùng Moodle đã xác minh" and input.disabled for input in ui.text_input)
     assert [radio.label for radio in ui.radio].count("Phạm vi kiến thức")==2
     assert any(select.label=="Chọn chương" for select in ui.selectbox)
     ui.chat_input[0].set_value("Explain Python").run()
@@ -67,11 +69,14 @@ def test_authenticated_streamlit_chat_quiz_grade_progress_and_logout(ui):
     assert not ui.exception and ui.session_state["work_review"]["results"][0]["explanation_status"]=="available"
     ui.number_input[1].set_value(1)
     button(ui,"Tạo Flashcards").click().run()
-    assert not ui.exception and any(e.label=="Python?" for e in ui.expander)
+    assert not ui.exception and any("Python?" in item.value for item in ui.markdown)
+    button(ui,"Hiển thị đáp án").click().run()
+    review_radio=next(radio for radio in ui.radio if radio.label=="Mức độ nhớ")
+    assert list(review_radio.options)==["Chưa nhớ","Khó nhớ","Nhớ tốt","Rất dễ nhớ"]
     button(ui,"Ghi nhận ôn tập").click().run()
     assert not ui.exception and ui.success
     next(radio for radio in ui.radio if radio.label=="Hiển thị").set_value("Đã ôn").run()
-    assert any(e.label=="Python?" for e in ui.expander)
+    assert any("Python?" in item.value for item in ui.markdown)
     ui.run()
     assert not ui.json
     assert any(m.label=="Mức độ thành thạo" for m in ui.metric)
@@ -99,6 +104,14 @@ def test_streamlit_post_quiz_flashcard_review_action(ui):
     assert ui.session_state["work_grade"]["score_percent"]==0
     button(ui,"Ôn tập câu sai bằng Flashcard").click().run()
     assert not ui.exception and ui.session_state["work_review_batch"]["status"]=="READY"
+
+
+def test_course_scope_cleanup_tolerates_streamlit_widget_state_removal():
+    class TransientState(dict):
+        def __iter__(self): return iter(("work_quiz", "card_review_removed", "safe"))
+    state=TransientState(work_quiz="quiz",safe="keep")
+    clear_scoped_work_state(state)
+    assert state=={"safe":"keep"}
 
 
 def test_quiz_and_flashcard_number_inputs_stay_within_limits(ui):
@@ -144,6 +157,35 @@ def test_course_display_names_are_presentation_only():
     assert course_display_name("INT2001") == "Lập trình Web nâng cao"
     assert course_display_name("OTHER", "Môn Moodle xác minh") == "Môn Moodle xác minh"
     assert course_display_name("OTHER") == "Khóa học"
+
+
+def test_verified_topbar_is_escaped_and_does_not_render_identity_identifiers():
+    class Capture:
+        value = ""
+        def markdown(self, value, **_): self.value = value
+    capture = Capture()
+    render_verified_topbar(capture, "Môn <đã xác minh>")
+    assert "Môn &lt;đã xác minh&gt;" in capture.value
+    assert "Phiên Moodle đã xác minh" in capture.value
+    assert "owner_ref" not in capture.value
+
+
+def test_single_authorized_course_does_not_repeat_course_selector_in_every_workspace():
+    class Capture:
+        calls = 0
+        def markdown(self, *_args, **_kwargs): self.calls += 1
+    capture = Capture()
+    render_verified_dashboard(capture, [{"course_key": "INT1339"}], "INT1339")
+    assert capture.calls == 0
+
+
+def test_verified_empty_state_escapes_server_supplied_copy():
+    class Capture:
+        value = ""
+        def markdown(self, value, **_): self.value = value
+    capture = Capture()
+    render_verified_empty_state(capture, "<title>", "<message>")
+    assert "&lt;title&gt;" in capture.value and "&lt;message&gt;" in capture.value
 
 
 def test_invalid_login_has_no_course_or_authenticated_session(ui):
