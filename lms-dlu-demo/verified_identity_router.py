@@ -19,4 +19,10 @@ def create_identity_router(authorizer):
             courses.append({**asdict(scope),"can_sync":can_sync})
         return {"owner_ref":access.owner_ref,"moodle_user_id":access.binding.moodle_user_id,"courses":courses}
 
+    @router.get("/auth/me/profile")
+    def profile(access=Depends(authorizer)):
+        """Expose only the authenticated user's stable, read-only Moodle identity."""
+        return {"moodle_user_id":access.binding.moodle_user_id,
+                "course_count":len(access.courses()),"account_status":"VERIFIED"}
+
     return router

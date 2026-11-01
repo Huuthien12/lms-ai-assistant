@@ -3,12 +3,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import uuid4
 from urllib.parse import quote
+from html import escape
 import os
 import re
 import streamlit as st
 from deeptutor_client import RealDeepTutorClient, BackendRequestError
 from demo_quick_login import DemoSecretUnavailable, configured_accounts, load_account_token
-from ui.components import course_display_name, quiz_document_titles, render_citations, render_document_card, render_document_workspace_header, render_verified_dashboard, strip_system_citation_markers
+from ui.components import course_display_name, quiz_document_titles, render_citations, render_document_card, render_document_workspace_header, render_learning_tab_header, render_verified_dashboard, render_verified_empty_state, render_verified_topbar, strip_system_citation_markers
 from ui.theme import inject_theme
 
 
@@ -25,6 +26,13 @@ def clear_verified_session():
 def clear_quiz_state():
     for key in ("work_quiz", "work_attempt", "work_grade", "work_review"):
         st.session_state.pop(key, None)
+
+
+def clear_scoped_work_state(state):
+    """Clear stale widget/work state even when Streamlit already removed a widget key."""
+    for key in list(state):
+        if key.startswith(("work_", "quiz_answer_", "card_review_", "card_reveal_")):
+            state.pop(key, None)
 
 
 def select_verified_course(course_key, allowed):
@@ -131,10 +139,10 @@ def render_progress_dashboard(result):
         item.get("topic"): item.get("recommended_actions", [])
         for item in recommendations if isinstance(item, dict) and isinstance(item.get("topic"), str)
     }
-    st.subheader("Tiến độ học tập")
+    st.subheader("Theo chủ đề")
     st.caption("Điểm thành thạo được tính từ bài Quiz và lần ôn Flashcard đã ghi nhận.")
     if not topics:
-        st.info("Chưa có dữ liệu học tập. Hãy làm Quiz hoặc ghi nhận ôn Flashcard để xem tiến độ.")
+        render_verified_empty_state(st, "Chưa có dữ liệu học tập", "Hãy làm Quiz hoặc ghi nhận ôn Flashcard để xem tiến độ.")
         return
     for topic in topics:
         if not isinstance(topic, dict):
@@ -210,11 +218,12 @@ def render_verified_learning(base_url):
                 st.session_state.login_error=error.status_code
         with st.form("verified_login"):
             st.text_input("Token Moodle cá nhân",type="password",key="moodle_login_token")
-            st.form_submit_button("Đăng nhập",on_click=login)
+            st.form_submit_button("Đăng nhập",on_click=login,type="primary",use_container_width=True)
         if st.session_state.get("login_error"): show_error(BackendRequestError(st.session_state.login_error))
         return
     st.sidebar.markdown("<div class='sidebar-brand'><span>✦</span><div><strong>DeepTutor</strong><small>Không gian học tập</small></div></div>",unsafe_allow_html=True)
-    st.sidebar.button("Đăng xuất",on_click=clear_verified_session)
+    st.sidebar.caption("Phiên Moodle đã xác minh")
+    st.sidebar.button("Đăng xuất",key="sidebar_logout",on_click=clear_verified_session)
     client=RealDeepTutorClient(base_url,personal_token=session.token)
     try: identity=client.identity()
     except BackendRequestError as error:
@@ -230,16 +239,26 @@ def render_verified_learning(base_url):
     st.sidebar.caption("Khóa học được cấp quyền")
     course=st.sidebar.selectbox("Khóa học của tôi",allowed,format_func=labels.get,key="verified_course",
                                 on_change=synchronize_verified_course,args=(allowed,))
+    render_verified_topbar(st, labels[course])
     render_verified_dashboard(st,courses,course,lambda choice: select_verified_course(choice,allowed))
     scope=(identity["owner_ref"],course)
     if st.session_state.get("work_scope")!=scope:
-        for key in list(st.session_state):
-            if key.startswith(("work_","quiz_answer_","card_review_")): del st.session_state[key]
+        clear_scoped_work_state(st.session_state)
         st.session_state.work_scope=scope
     prefix="/learning/courses/"+quote(course,safe="")
     generation_client_timeout=float(os.getenv("LEARNING_CLIENT_TIMEOUT_SECONDS","170"))
-    documents,chat,quiz,cards,progress=st.tabs(["Tài liệu","AI Tutor","Quiz","Flashcards","Progress"])
+    overview,documents,chat,quiz,cards,progress,profile=st.tabs(["Tổng quan","Tài liệu","AI Tutor","Quiz","Flashcards","Progress","Hồ sơ"])
     active_publications=[]
+    with overview:
+        render_learning_tab_header(st, "Tổng quan", "Chỉ hiển thị dữ liệu khóa học đã được Moodle xác minh.", "Đọc dữ liệu")
+        try:
+            course_overview=client.request("GET",prefix+"/overview")
+            st.metric("Tài liệu ACTIVE", course_overview["active_publication_count"])
+            if course_overview.get("can_manage_documents"):
+                st.info("Bạn có quyền quản lý publication của học phần này. Các thao tác đồng bộ nằm trong tab Tài liệu.")
+            else:
+                st.caption("Tiến độ cá nhân và gợi ý học tập được hiển thị trong tab Progress.")
+        except BackendRequestError as error: show_error(error)
     with documents:
         try:
             with st.spinner("Đang tải publication ACTIVE..."):
@@ -250,25 +269,34 @@ def render_verified_learning(base_url):
             render_document_workspace_header(st,course,len(published),can_sync,labels[course])
             if can_sync:
                 data["resources"]=client.request("GET",prefix+"/resources")["resources"]
-                if st.button("Đồng bộ toàn khóa học"):
+                if st.button("Đồng bộ toàn khóa học", type="primary"):
                     client.request("POST",prefix+"/sync"); st.rerun()
             for resource in data.get("resources",[]):
                 identifier=resource["document_id"]
                 render_document_card(st,resource,published.get(identifier))
                 if can_sync:
-                    if st.button("Đồng bộ",key="sync_"+identifier):
-                        client.request("POST",prefix+"/documents/"+quote(identifier,safe="")+"/sync"); st.rerun()
-                    if identifier in published and st.button("Ngừng sử dụng",key="retire_"+identifier):
-                        client.request("DELETE",prefix+"/documents/"+quote(identifier,safe="")); st.rerun()
+                    sync_action, retire_action, _ = st.columns([1, 1, 4])
+                    with sync_action:
+                        if st.button("Đồng bộ",key="sync_"+identifier):
+                            client.request("POST",prefix+"/documents/"+quote(identifier,safe="")+"/sync"); st.rerun()
+                    if identifier in published:
+                        with retire_action:
+                            if st.button("Ngừng sử dụng",key="retire_"+identifier):
+                                client.request("DELETE",prefix+"/documents/"+quote(identifier,safe="")); st.rerun()
             resource_ids={r["document_id"] for r in data.get("resources",[])}
             for identifier,publication in published.items():
                 if identifier not in resource_ids:
                     render_document_card(st,None,publication)
-                    if can_sync and st.button("Ngừng sử dụng",key="retire_"+identifier):
-                        client.request("DELETE",prefix+"/documents/"+quote(identifier,safe="")); st.rerun()
-            if not data.get("resources") and not published: st.info("Chưa có tài liệu hoặc publication ACTIVE được phép truy cập.")
+                    if can_sync:
+                        retire_action, _ = st.columns([1, 5])
+                        with retire_action:
+                            if st.button("Ngừng sử dụng",key="retire_"+identifier):
+                                client.request("DELETE",prefix+"/documents/"+quote(identifier,safe="")); st.rerun()
+            if not data.get("resources") and not published:
+                render_verified_empty_state(st, "Chưa có tài liệu", "Chưa có publication ACTIVE được phép truy cập.")
         except BackendRequestError as error: show_error(error)
     with chat:
+        render_learning_tab_header(st, "AI Tutor", "Hỏi về tài liệu ACTIVE và nhận câu trả lời có nguồn.", "Có trích dẫn")
         if "work_messages" not in st.session_state:
             try: st.session_state.work_messages=session_messages(client.request("GET",prefix+"/history").get("history",[]))
             except BackendRequestError as error: show_error(error); st.session_state.work_messages=[]
@@ -288,6 +316,7 @@ def render_verified_learning(base_url):
             try: client.request("DELETE",prefix+"/history"); st.session_state.work_messages=[]; st.rerun()
             except BackendRequestError as error: show_error(error)
     with quiz:
+        render_learning_tab_header(st, "Quiz", "Tạo câu hỏi từ tài liệu ACTIVE, nộp bài và xem phản hồi sau chấm điểm.", "Từ tài liệu ACTIVE")
         scope_mode,chapter_id,topic=scope_control("quiz",active_publications)
         count=count_control("Số câu hỏi","quiz_count")
         if st.button("Tạo Quiz",type="primary"):
@@ -369,6 +398,7 @@ def render_verified_learning(base_url):
                         if titles:
                             st.caption("Tài liệu: " + "; ".join(titles))
     with cards:
+        render_learning_tab_header(st, "Flashcards", "Tạo và ôn thẻ có căn cứ từ tài liệu được cấp quyền.", "Ôn tập có ghi nhận")
         scope_mode,chapter_id,topic=scope_control("cards",active_publications)
         count=count_control("Số thẻ cần tạo","card_count")
         if st.button("Tạo Flashcards",type="primary"):
@@ -389,23 +419,40 @@ def render_verified_learning(base_url):
             visible=[card for card in all_cards if card_filter=="Tất cả" or
                      (card_filter=="Đã ôn" and card.get("reviewed")) or
                      (card_filter=="Cần ôn tập" and card.get("needs_review"))]
-            if not visible: st.info("Không có Flashcard phù hợp với bộ lọc.")
+            if not visible:
+                render_verified_empty_state(st, "Chưa có Flashcard", "Không có Flashcard phù hợp với bộ lọc hiện tại.")
             labels={"AGAIN":"Chưa nhớ","HARD":"Khó nhớ","GOOD":"Nhớ tốt","EASY":"Rất dễ nhớ"}
             for card in visible:
-                with st.expander(card["front_text"]):
-                    st.write(card["back_text"])
+                identifier=card["flashcard_id"]
+                reveal_key="card_reveal_"+identifier
+                with st.container(border=True):
+                    st.markdown("<div class='flashcard-study'><span>MẶT TRƯỚC</span><h3>"+escape(card["front_text"])+"</h3></div>",unsafe_allow_html=True)
+                    if not st.session_state.get(reveal_key):
+                        if st.button("Hiển thị đáp án",key="reveal_"+identifier,use_container_width=True):
+                            st.session_state[reveal_key]=True; st.rerun()
+                        continue
+                    st.markdown("<div class='flashcard-study answer'><span>ĐÁP ÁN</span><p>"+escape(card["back_text"])+"</p></div>",unsafe_allow_html=True)
                     render_citations(st,card.get("sources",[]))
                     st.caption("Đã ôn" if card.get("reviewed") else "Chưa ôn")
-                    rating=st.selectbox("Mức độ nhớ",list(labels),format_func=labels.get,
-                                        key="card_review_"+card["flashcard_id"])
-                    if st.button("Ghi nhận ôn tập",key="record_"+card["flashcard_id"]):
+                    rating=st.radio("Mức độ nhớ",list(labels),format_func=labels.get,horizontal=True,
+                                    key="card_review_"+identifier)
+                    if st.button("Ghi nhận ôn tập",key="record_"+identifier,type="primary"):
                         pending=st.session_state.setdefault("work_review_ids",{})
-                        key=(card["flashcard_id"],rating); identifier=pending.setdefault(key,uuid4().hex)
-                        client.request("POST","/learning/flashcards/"+card["flashcard_id"]+"/reviews",{"rating":rating,"review_id":identifier})
+                        key=(identifier,rating); review_id=pending.setdefault(key,uuid4().hex)
+                        client.request("POST","/learning/flashcards/"+identifier+"/reviews",{"rating":rating,"review_id":review_id})
                         pending.pop(key,None); st.success("Đã ghi nhận ôn tập và cập nhật Progress.")
         except BackendRequestError as error: show_error(error)
     with progress:
         try:
             result=client.request("GET",prefix+"/progress")
+            render_learning_tab_header(st, "Tiến độ", "Thành thạo và gợi ý được tính từ Quiz và lượt ôn đã ghi nhận.")
             render_progress_dashboard(result)
+        except BackendRequestError as error: show_error(error)
+    with profile:
+        render_learning_tab_header(st, "Hồ sơ", "Thông tin chỉ đọc của phiên Moodle hiện tại.", "Chỉ đọc")
+        try:
+            profile_data=client.request("GET","/auth/me/profile")
+            st.text_input("Mã người dùng Moodle đã xác minh", value=str(profile_data["moodle_user_id"]), disabled=True)
+            st.caption(f"Được cấp quyền cho {profile_data['course_count']} khóa học trong phiên này.")
+            st.info("DeepTutor không thay đổi hồ sơ hoặc mật khẩu. Hãy dùng luồng quản lý tài khoản Moodle do đơn vị của bạn cung cấp.")
         except BackendRequestError as error: show_error(error)

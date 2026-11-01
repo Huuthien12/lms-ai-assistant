@@ -40,10 +40,19 @@ def test_principal_bound_course_visibility(client):
     assert "Bearer" not in str(a) and "_token" not in str(a)
 
 
+def test_self_profile_is_read_only_and_excludes_internal_owner_reference(client):
+    profile=client.get("/auth/me/profile", headers={"Authorization": "Bearer A"})
+    assert profile.status_code==200
+    assert profile.json()=={"moodle_user_id":1,"course_count":1,"account_status":"VERIFIED"}
+    assert "owner_ref" not in profile.text and "Bearer" not in profile.text
+
+
 @pytest.mark.parametrize("token,status", [(None,401),("bad",401),("down",503)])
 def test_login_fail_closed(client, token, status):
     r=client.get("/auth/me",headers={} if token is None else {"Authorization": "Bearer "+token})
     assert r.status_code == status and "private-token" not in r.text
+    profile=client.get("/auth/me/profile",headers={} if token is None else {"Authorization": "Bearer "+token})
+    assert profile.status_code==status and "private-token" not in profile.text
 
 
 def test_lecturer_action_boundary_is_live_exact_and_fails_closed(client):

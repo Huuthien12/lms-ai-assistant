@@ -21,6 +21,7 @@ from course_query_auth import create_moodle_query_authorizer
 from deeptutor_integration.service import DeepTutorService
 from deeptutor_integration.errors import DeepTutorError
 from deeptutor_integration.contracts import AuthorizedCourseScope
+from deeptutor_integration.auth_contracts import CourseAction
 from test_verified_chat_integration import runtime, document
 from verified_learning_fakes import LearningConnection
 
@@ -560,6 +561,37 @@ def test_owner_history_and_progress_are_never_taken_from_client(learning):
     assert client.get("/learning/courses/INT1339/history",headers=headers("B")).status_code==403
     assert client.get("/learning/courses/OTHER/history",headers=headers("B")).json()["history"]==[]
     assert client.get("/learning/courses/OTHER/progress?student_id=A",headers=headers("B")).json()["topics"]==[]
+
+
+def test_course_overview_is_authorized_active_only_and_has_no_private_learner_data(learning):
+    client,_,state,_,_,_=learning
+    before=deepcopy(state)
+    response=client.get("/learning/courses/INT1339/overview",headers=headers())
+    assert response.status_code==200
+    assert response.json()=={"course_id":"INT1339","active_publication_count":1,"can_manage_documents":False}
+    assert client.get("/learning/courses/INT1339/overview",headers=headers("B")).status_code==403
+    assert client.get("/learning/courses/INT1339/overview").status_code==401
+    assert state==before
+
+
+def test_course_overview_exposes_management_capability_only_after_live_authorization(learning):
+    client,store,_,orch,pub,_=learning
+    from types import SimpleNamespace
+    from fastapi import FastAPI
+    class Access:
+        owner_ref="owner"
+        boundary=SimpleNamespace(capability_evidence=object())
+        def __init__(self): self.actions=[]
+        def scope(self,course_id,action=CourseAction.QUERY_COURSE):
+            assert course_id=="INT1339"; self.actions.append(action)
+            return AuthorizedCourseScope(9,"INT1339","int1339-python","owner","https://moodle.test")
+    access=Access()
+    app=FastAPI()
+    app.include_router(create_verified_learning_router(lambda:access,pub,store,orch,
+                       GroundedChatService(orch),RecommendationService(orch)))
+    response=TestClient(app).get("/learning/courses/INT1339/overview")
+    assert response.json()["can_manage_documents"] is True
+    assert access.actions==[CourseAction.QUERY_COURSE,CourseAction.SYNC_COURSE_RESOURCE]
 
 
 def test_lecturer_sync_requires_actual_capability_before_discovery(learning,monkeypatch):
