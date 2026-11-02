@@ -10,13 +10,17 @@ class LearningConnection(MemoryConnection):
 class LearningCursor(MemoryCursor):
     def execute(self, sql, *values):
         statement=" ".join(sql.split()); s=self.conn.state
-        if "ReviewBatches" in statement:
+        if statement.startswith("SELECT MAX(b.updated_at) FROM dbo.ReviewBatchCards"):
+            rows=[batch[6] for batch_id,card_id,_ in s.get("batch_cards",set()) if card_id==values[0]
+                  for batch in [s["batches"][batch_id]] if batch[1:4]==(values[1],values[2],"READY")]
+            self.result=Row((max(rows),)) if rows else Row((None,))
+        elif "ReviewBatches" in statement:
             s.setdefault("batches",{})
             if statement.startswith("SELECT batch_id,owner_ref"):
                 found=next(((batch,row) for batch,row in s["batches"].items() if row[0]==values[0]),None)
                 self.result=Row((found[0],found[1][1],found[1][2],found[1][3],found[1][6])) if found else None
             elif statement.startswith("SELECT owner_ref,course_id,status,lease_id"):
-                row=s["batches"].get(values[0]); self.result=Row((row[1],row[2],row[3],row[4])) if row else None
+                row=s["batches"].get(values[0]); self.result=Row((row[1],row[2],row[3],row[4],row[5])) if row else None
             elif statement.startswith("INSERT INTO"):
                 batch,attempt,owner,course,lease,provenance,created,updated=values
                 if any(row[0]==attempt for row in s["batches"].values()): raise RuntimeError("duplicate attempt")
@@ -29,10 +33,15 @@ class LearningCursor(MemoryCursor):
                 elif "status='PENDING'" in statement:
                     lease,_,batch=values; old=s["batches"][batch]; s["batches"][batch]=(old[0],old[1],old[2],"PENDING",lease,old[5],datetime.utcnow())
                 elif "status='READY'" in statement:
-                    _,batch,lease=values; old=s["batches"][batch]; self.rowcount=int(old[4]==lease); s["batches"][batch]=(old[0],old[1],old[2],"READY",None,old[5],datetime.utcnow())
+                    provenance,_,batch,lease=values; old=s["batches"][batch]; self.rowcount=int(old[4]==lease); s["batches"][batch]=(old[0],old[1],old[2],"READY",None,provenance,datetime.utcnow())
+        elif statement.startswith("SELECT COUNT(*) FROM dbo.QuizAttempts"):
+            self.result=Row((sum(item["student_id"]==values[0] and item["course_id"]==values[1] and item["status"]=="SUBMITTED" for item in s["attempts"].values()),))
+        elif statement.startswith("SELECT COUNT(*) FROM dbo.FlashcardReviews"):
+            self.result=Row((sum(review[0]==values[0] and s["cards"].get(review[1],(None,))[0]==values[1] for review in s["reviews"].values()),))
         elif "ReviewBatchCards" in statement:
             s.setdefault("batch_cards",set())
             if statement.startswith("INSERT INTO"):
+                if s.get("fail_batch_card"): raise RuntimeError("injected batch mapping failure")
                 membership=(values[0],values[1])
                 if any(item[:2]==membership for item in s["batch_cards"]): raise RuntimeError("duplicate membership")
                 s["batch_cards"].add((*membership,values[2]))

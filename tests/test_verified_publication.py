@@ -23,6 +23,7 @@ def publication(tmp_path):
         stored[kb]=data; return data
     adapter.publish.side_effect=publish
     adapter.retrieve.side_effect=lambda kb,q,**kwargs:stored[kb]
+    adapter.manifest.side_effect=lambda kb,**kwargs:stored[kb]
     service=VerifiedPublicationService(DeepTutorConfig(tmp_path,tmp_path/"engine",tmp_path/"cli",tmp_path/"runtime"),adapter)
     scope=AuthorizedCourseScope(9,"INT1339","int1339-python","owner-A","https://moodle.test")
     return service,scope,adapter
@@ -154,3 +155,31 @@ def test_chapter_context_retrieves_only_selected_active_document(publication):
         with service.context(scope,"question",document_id="missing"):
             pytest.fail("No retrieval for an invalid chapter")
     assert error.value.status_code==422
+
+
+def test_provenance_context_uses_exact_active_manifest_not_semantic_search(publication):
+    service,scope,adapter=publication
+    service.publish(scope,doc())
+    record=next(iter(service.ledger.snapshot().records.values()))
+    chunk=record.chunk_manifest[0]
+    bindings={(chunk.source_ref,record.document_id,record.document_version_id,chunk.content_sha256)}
+    adapter.retrieve.reset_mock()
+    adapter.retrieve.side_effect=AssertionError("post-quiz provenance must not use semantic retrieval")
+    with service.provenance_context(scope,"What is covered?",bindings) as context:
+        assert context.chunks[0].source_ref==chunk.source_ref
+        assert context.chunks[0].content==doc().markdown
+    adapter.retrieve.assert_not_called()
+    adapter.manifest.assert_called_once_with(record.provider_publication_ref)
+
+
+def test_provenance_context_rejects_changed_active_version(publication):
+    service,scope,_=publication
+    service.publish(scope,doc())
+    record=next(iter(service.ledger.snapshot().records.values()))
+    chunk=record.chunk_manifest[0]
+    bindings={(chunk.source_ref,record.document_id,record.document_version_id,chunk.content_sha256)}
+    service.publish(scope,doc("UPDATED full chunk "*60))
+    with pytest.raises(DeepTutorError) as error:
+        with service.provenance_context(scope,"What is covered?",bindings):
+            pytest.fail("Stale provenance must not become a fresh receipt")
+    assert error.value.code=="inactive_context" and error.value.status_code==409

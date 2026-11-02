@@ -150,6 +150,48 @@ async def test_grounded_generation_uses_trusted_topic_and_difficulty(mock_orches
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("model_link",[None,"unknown",["rpc-when","rpc-when"],{"question_id":"rpc-when"}])
+async def test_review_flashcards_bind_server_question_and_ignore_model_identifier(mock_orchestrator,model_link):
+    question={"question_id":"rpc-when","question":"When is RPC appropriate?","explanation":"Use RPC for actions."}
+    data=json.loads(mock_orchestrator.generate.return_value.content)
+    card=data["flashcards"][0]
+    payload={**card,"front_text":"When is RPC appropriate?"}
+    if model_link is not None: payload["wrong_question_id"]=model_link
+    mock_orchestrator.generate.return_value.content=json.dumps({"flashcards":[payload]})
+    result=await FlashcardService(mock_orchestrator).generate_grounded_flashcards(
+        **grounded_input(),review_question=question)
+    assert "wrong_question_id" not in result["flashcards"][0]
+    prompt=json.loads(mock_orchestrator.generate.call_args.kwargs["prompt"])
+    assert prompt["review_question"]==question
+
+
+@pytest.mark.asyncio
+async def test_review_flashcards_reject_unlinked_generic_cards(mock_orchestrator):
+    question={"question_id":"rpc","question":"When is RPC appropriate?","explanation":"Use RPC for actions."}
+    with pytest.raises(ValueError,match="INVALID_FLASHCARD_SCHEMA"):
+        await FlashcardService(mock_orchestrator).generate_grounded_flashcards(
+            **grounded_input(),review_question=question)
+
+
+@pytest.mark.asyncio
+async def test_three_rpc_rest_misses_keep_one_relevant_card_per_question(mock_orchestrator):
+    questions=[
+        {"question_id":"rpc-when","question":"When are RPC-style APIs appropriate?","explanation":"RPC is suitable for explicit actions."},
+        {"question_id":"rpc-use","question":"What are RPC-style APIs used for?","explanation":"RPC models operation-oriented calls."},
+        {"question_id":"rest-meaning","question":"What does RESTful mean?","explanation":"REST models resources through a uniform interface."},
+    ]
+    card=json.loads(mock_orchestrator.generate.return_value.content)["flashcards"][0]
+    fronts=["Khi nào nên dùng RPC?","RPC dùng để làm gì?","RESTful nghĩa là gì?"]
+    results=[]
+    for question,front in zip(questions,fronts):
+        mock_orchestrator.generate.return_value.content=json.dumps({"flashcards":[{**card,"front_text":front,"back_text":question["explanation"]}]})
+        results.extend((await FlashcardService(mock_orchestrator).generate_grounded_flashcards(
+            **grounded_input(),review_question=question))["flashcards"])
+    assert len(results)==3
+    assert all(any(term in (item["front_text"]+item["back_text"]).casefold() for term in ("rpc","rest")) for item in results)
+
+
+@pytest.mark.asyncio
 async def test_count_mismatch_and_upper_bound(mock_orchestrator):
     service = FlashcardService(mock_orchestrator)
     with pytest.raises(ValueError, match="^INVALID_FLASHCARD_SCHEMA$"):

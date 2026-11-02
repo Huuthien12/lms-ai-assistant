@@ -1,6 +1,7 @@
 """Authenticated Streamlit vertical flow; credentials are session-memory only."""
 from dataclasses import dataclass, field
 from datetime import datetime
+from random import Random
 from uuid import uuid4
 from urllib.parse import quote
 from html import escape
@@ -33,6 +34,11 @@ def clear_scoped_work_state(state):
     for key in list(state):
         if key.startswith(("work_", "quiz_answer_", "card_review_", "card_reveal_")):
             state.pop(key, None)
+
+
+def normalize_verified_tab(state):
+    """Redirect a persisted legacy Profile selection to the first remaining tab."""
+    if state.get("verified_learning_tab")=="Hồ sơ": state["verified_learning_tab"]="Tổng quan"
 
 
 def select_verified_course(course_key, allowed):
@@ -80,6 +86,9 @@ def show_error(error):
     codes["LEARNING_PROVIDER_REQUEST_TOO_LARGE"]="Yêu cầu Quiz vượt giới hạn provider. Hãy chọn ít câu hơn hoặc một chương hẹp hơn."
     codes["LEARNING_RATE_LIMITED"]="Provider đang giới hạn tần suất. Vui lòng chờ rồi thử lại."
     codes["invalid_chapter"]="Chương đã chọn không còn thuộc publication ACTIVE của khóa học."
+    codes["trusted_topic_mapping_unavailable"]=(
+        "Tài liệu nguồn của Quiz không còn khớp với publication ACTIVE. "
+        "Hãy làm Quiz mới sau khi giảng viên làm mới tài liệu.")
     codes["NO_NEW_FLASHCARDS"]="Không tạo được thẻ mới vì nội dung bị trùng với Flashcard đã lưu."
     st.error(codes.get(error.code,messages.get(error.status_code,"Không thể hoàn tất yêu cầu.")))
 
@@ -133,38 +142,42 @@ def progress_updated_at(value):
 
 
 def render_progress_dashboard(result):
-    topics = result.get("topics", []) if isinstance(result, dict) else []
-    recommendations = result.get("recommendations", []) if isinstance(result, dict) else []
-    actions_by_topic = {
-        item.get("topic"): item.get("recommended_actions", [])
-        for item in recommendations if isinstance(item, dict) and isinstance(item.get("topic"), str)
-    }
-    st.subheader("Theo chủ đề")
+    summary=result.get("summary",{}) if isinstance(result,dict) else {}
+    documents=result.get("documents",[]) if isinstance(result,dict) else []
+    st.subheader("Tổng quan học tập")
     st.caption("Điểm thành thạo được tính từ bài Quiz và lần ôn Flashcard đã ghi nhận.")
-    if not topics:
-        render_verified_empty_state(st, "Chưa có dữ liệu học tập", "Hãy làm Quiz hoặc ghi nhận ôn Flashcard để xem tiến độ.")
+    columns=st.columns(3)
+    columns[0].metric("Tài liệu được phép học",summary.get("accessible_document_count") if type(summary.get("accessible_document_count")) is int else 0)
+    columns[1].metric("Quiz đã hoàn thành",summary.get("completed_quiz_attempts") if type(summary.get("completed_quiz_attempts")) is int else 0)
+    columns[2].metric("Flashcard đã ôn",summary.get("reviewed_flashcards") if type(summary.get("reviewed_flashcards")) is int else 0)
+    overall=progress_percent(summary.get("overall_mastery"))
+    if overall is not None: st.progress(overall/100,text=f"Mức độ thành thạo tổng thể: {overall:g}%")
+    needing=summary.get("documents_needing_review",[])
+    if needing: st.info("Cần ôn lại: "+" • ".join(item for item in needing if isinstance(item,str)))
+    st.subheader("Tiến độ theo tài liệu")
+    if not documents:
+        render_verified_empty_state(st, "Chưa có tài liệu được phép", "Chưa có publication ACTIVE được phép truy cập.")
         return
-    for topic in topics:
-        if not isinstance(topic, dict):
+    for document in documents:
+        if not isinstance(document, dict):
             continue
-        score = progress_percent(topic.get("mastery_score"))
+        score = progress_percent(document.get("mastery_score"))
         with st.container(border=True):
-            st.subheader(topic.get("topic") if isinstance(topic.get("topic"), str) else "Chủ đề")
+            st.subheader(document.get("title") if isinstance(document.get("title"), str) else "Tài liệu đã xác minh")
             if score is None:
-                st.caption("Chưa có đủ bằng chứng để chấm điểm thành thạo.")
+                st.caption("Chưa có hoạt động học tập")
             else:
                 st.progress(score / 100, text=f"Điểm thành thạo: {score:g}%")
             mastery, confidence, evidence = st.columns(3)
-            mastery.metric("Mức độ thành thạo", progress_label(_MASTERY_LABELS, topic.get("level")))
-            confidence.metric("Độ tin cậy", progress_label(_CONFIDENCE_LABELS, topic.get("confidence")))
-            evidence.metric("Số bằng chứng học tập", topic.get("evidence_count") if type(topic.get("evidence_count")) is int else 0)
-            st.caption("Cập nhật gần nhất: " + progress_updated_at(topic.get("last_updated_at")))
-            actions = actions_by_topic.get(topic.get("topic"), [])
+            mastery.metric("Mức độ thành thạo", progress_label(_MASTERY_LABELS, document.get("level")))
+            confidence.metric("Độ tin cậy", progress_label(_CONFIDENCE_LABELS, document.get("confidence")))
+            evidence.metric("Hoạt động học tập", document.get("activity_count") if type(document.get("activity_count")) is int else 0)
+            recommendation=document.get("recommendation")
+            actions=recommendation.get("recommended_actions",[]) if isinstance(recommendation,dict) else []
             if actions:
                 labels = [progress_label(_ACTION_LABELS, action) for action in actions if isinstance(action, str)]
                 if labels:
                     st.info("Gợi ý ôn tập: " + " • ".join(labels))
-            recommendation=next((item for item in recommendations if item.get("topic")==topic.get("topic")),None)
             if isinstance(recommendation,dict) and isinstance(recommendation.get("reason"),str):
                 st.caption(recommendation["reason"] + " Dùng các tab Quiz hoặc Flashcards để thực hiện gợi ý.")
 
@@ -177,6 +190,97 @@ def scope_control(prefix,chapters):
         chapter_id=st.selectbox("Chọn chương",list(labels),format_func=labels.get,key=prefix+"_chapter")
         return "chapter",chapter_id,labels[chapter_id]
     return "course",None,"Toàn bộ khóa học"
+
+
+def flashcard_decks(cards):
+    """Only current, server-mapped chapters form learner study decks."""
+    decks={}
+    for card in cards:
+        if not isinstance(card,dict) or not card.get("needs_review"):
+            continue
+        chapter=card.get("chapter_label")
+        if isinstance(chapter,str) and chapter.strip(): decks.setdefault(chapter,[]).append(card)
+    return dict(sorted(decks.items(),key=lambda item:int(re.search(r"\d+$",item[0]).group()) if re.search(r"\d+$",item[0]) else item[0]))
+
+
+def flashcard_saved_decks(cards):
+    decks={}
+    for card in cards:
+        chapter=card.get("chapter_label") if isinstance(card,dict) else None
+        if isinstance(chapter,str) and chapter.strip(): decks.setdefault(chapter,[]).append(card)
+    return dict(sorted(decks.items(),key=lambda item:int(re.search(r"\d+$",item[0]).group()) if re.search(r"\d+$",item[0]) else item[0]))
+
+
+def flashcard_study_cards(cards, deck, mode, review_filter="ACTIVE"):
+    decks=flashcard_saved_decks(cards)
+    selected=[card for topic,items in decks.items()
+              if deck=="Tất cả" or topic==deck for card in items]
+    rating={"UNRATED":None,"AGAIN":"AGAIN","HARD":"HARD","GOOD":"GOOD","EASY":"EASY"}.get(review_filter,review_filter)
+    if review_filter=="ACTIVE": selected=[card for card in selected if card.get("needs_review")]
+    elif review_filter!="ALL": selected=[card for card in selected if card.get("latest_rating")==rating]
+    if mode=="Chỉ thẻ chưa nhớ": selected=[card for card in selected if card.get("needs_review")]
+    if mode=="Học ngẫu nhiên":
+        Random("|".join(str(card.get("flashcard_id","")) for card in selected)).shuffle(selected)
+    return selected
+
+
+def render_flashcard_workspace(client, all_cards):
+    """Study authorized persisted Flashcards in a responsive three-panel layout."""
+    decks=flashcard_saved_decks(all_cards)
+    if not decks:
+        render_verified_empty_state(st,"Chưa có Flashcard","Tạo Flashcard từ tài liệu ACTIVE để bắt đầu ôn tập.")
+        return
+    deck_names=["Tất cả",*decks]
+    left,center,right=st.columns([1.05,1.7,1.05],gap="large")
+    with left:
+        st.subheader("Bộ flashcard")
+        deck=st.radio("Chọn bộ thẻ",deck_names,key="flashcard_deck",label_visibility="collapsed",
+                      format_func=lambda value: f"{value} · {sum(len(items) for items in decks.values()) if value=='Tất cả' else len(decks[value])} thẻ")
+        st.caption("Bộ thẻ chỉ hiển thị các chương ACTIVE đã có Flashcard lưu.")
+    with right:
+        st.subheader("Chế độ học")
+        mode=st.radio("Chế độ học",["Học lần lượt","Học ngẫu nhiên","Chỉ thẻ chưa nhớ"],key="flashcard_mode")
+        review_filter=st.selectbox("Xem thẻ đã lưu",["Hàng đợi hiện tại","Tất cả thẻ đã lưu","Chưa đánh giá","Chưa nhớ","Khó nhớ","Nhớ tốt","Rất dễ nhớ"],key="flashcard_saved_filter")
+        filter_codes={"Hàng đợi hiện tại":"ACTIVE","Tất cả thẻ đã lưu":"ALL","Chưa đánh giá":"UNRATED","Chưa nhớ":"AGAIN","Khó nhớ":"HARD","Nhớ tốt":"GOOD","Rất dễ nhớ":"EASY"}
+        scoped=flashcard_study_cards(all_cards,deck,"Học lần lượt","ACTIVE")
+        st.metric("Đã ôn",f"{sum(bool(card.get('reviewed')) for card in scoped)}/{len(scoped)}")
+        st.metric("Cần ôn",sum(bool(card.get("needs_review")) for card in scoped))
+        if review_filter!="Hàng đợi hiện tại": st.caption("Bộ lọc này chỉ thay đổi danh sách xem, không thay đổi trạng thái ôn tập.")
+    study_cards=flashcard_study_cards(all_cards,deck,mode,filter_codes[review_filter])
+    with center:
+        if not study_cards:
+            render_verified_empty_state(st,"Không có thẻ phù hợp","Thử chọn bộ khác hoặc chuyển sang học lần lượt.")
+            return
+        signature="|".join(str(card.get("flashcard_id","")) for card in study_cards)
+        if st.session_state.get("flashcard_study_signature")!=signature:
+            st.session_state.flashcard_study_signature=signature
+            st.session_state.flashcard_study_index=0
+        index=min(max(int(st.session_state.get("flashcard_study_index",0)),0),len(study_cards)-1)
+        card=study_cards[index]; identifier=card["flashcard_id"]
+        st.caption(f"Thẻ {index+1}/{len(study_cards)}")
+        st.progress((index+1)/len(study_cards))
+        reveal_key="card_reveal_"+identifier
+        with st.container(border=True):
+            st.markdown("<div class='flashcard-study'><span>CÂU HỎI</span><h3>"+escape(card["front_text"])+"</h3></div>",unsafe_allow_html=True)
+            navigation=st.columns(3)
+            if navigation[0].button("← Thẻ trước",key="previous_"+identifier,disabled=index==0,use_container_width=True):
+                st.session_state.flashcard_study_index=index-1; st.rerun()
+            if navigation[1].button("Hiển thị đáp án" if not st.session_state.get(reveal_key) else "Ẩn đáp án",key="reveal_"+identifier,use_container_width=True):
+                st.session_state[reveal_key]=not st.session_state.get(reveal_key); st.rerun()
+            if navigation[2].button("Thẻ tiếp →",key="next_"+identifier,disabled=index>=len(study_cards)-1,use_container_width=True):
+                st.session_state.flashcard_study_index=index+1; st.rerun()
+            if st.session_state.get(reveal_key):
+                st.markdown("<div class='flashcard-study answer'><span>ĐÁP ÁN</span><p>"+escape(card["back_text"])+"</p></div>",unsafe_allow_html=True)
+                render_citations(st,card.get("sources",[]))
+                labels={"AGAIN":"Chưa nhớ","HARD":"Khó nhớ","GOOD":"Nhớ tốt","EASY":"Rất dễ nhớ"}
+                rating=st.radio("Mức độ nhớ",list(labels),format_func=labels.get,horizontal=True,key="card_review_"+identifier)
+                if st.button("Ghi nhận ôn tập",key="record_"+identifier,type="primary",use_container_width=True):
+                    pending=st.session_state.setdefault("work_review_ids",{})
+                    review_key=(identifier,rating); review_id=pending.setdefault(review_key,uuid4().hex)
+                    client.request("POST","/learning/flashcards/"+identifier+"/reviews",{"rating":rating,"review_id":review_id})
+                    pending.pop(review_key,None)
+                    st.success("Đã ghi nhận ôn tập. Progress sẽ dùng lượt ôn này khi tải lại.")
+                    st.rerun()
 
 
 def render_verified_learning(base_url):
@@ -224,6 +328,7 @@ def render_verified_learning(base_url):
     st.sidebar.markdown("<div class='sidebar-brand'><span>✦</span><div><strong>DeepTutor</strong><small>Không gian học tập</small></div></div>",unsafe_allow_html=True)
     st.sidebar.caption("Phiên Moodle đã xác minh")
     st.sidebar.button("Đăng xuất",key="sidebar_logout",on_click=clear_verified_session)
+    normalize_verified_tab(st.session_state)
     client=RealDeepTutorClient(base_url,personal_token=session.token)
     try: identity=client.identity()
     except BackendRequestError as error:
@@ -247,7 +352,7 @@ def render_verified_learning(base_url):
         st.session_state.work_scope=scope
     prefix="/learning/courses/"+quote(course,safe="")
     generation_client_timeout=float(os.getenv("LEARNING_CLIENT_TIMEOUT_SECONDS","170"))
-    overview,documents,chat,quiz,cards,progress,profile=st.tabs(["Tổng quan","Tài liệu","AI Tutor","Quiz","Flashcards","Progress","Hồ sơ"])
+    overview,documents,chat,quiz,cards,progress=st.tabs(["Tổng quan","Tài liệu","AI Tutor","Quiz","Flashcards","Progress"])
     active_publications=[]
     with overview:
         render_learning_tab_header(st, "Tổng quan", "Chỉ hiển thị dữ liệu khóa học đã được Moodle xác minh.", "Đọc dữ liệu")
@@ -355,7 +460,12 @@ def render_verified_learning(base_url):
                         with st.spinner("Đang tạo Flashcard ôn tập từ tài liệu ACTIVE..."):
                             batch=client.request("POST","/learning/attempts/"+grade["attempt_id"]+"/review-flashcards",timeout_seconds=generation_client_timeout)
                         st.session_state.work_review_batch=batch
-                        st.success("Đã chuẩn bị Flashcard ôn tập. Mở tab Flashcards để ghi nhận mức độ nhớ.")
+                        if batch.get("status")=="READY":
+                            st.success("Đã chuẩn bị Flashcard ôn tập. Mở tab Flashcards để ghi nhận mức độ nhớ.")
+                        elif batch.get("status")=="PENDING":
+                            st.info("Bộ Flashcard đang được chuẩn bị. Hãy thử lại sau ít phút.")
+                        else:
+                            st.info("Không có câu sai cần tạo Flashcard ôn tập.")
                     except BackendRequestError as error: show_error(error)
             review=st.session_state.get("work_review",{})
             unavailable=[item["question_id"] for item in review.get("results",[])
@@ -412,47 +522,12 @@ def render_verified_learning(base_url):
                     st.warning(f"Đã bỏ qua {created['skipped_duplicate_count']} thẻ trùng với dữ liệu đã lưu.")
             except BackendRequestError as error: show_error(error)
         try:
-            card_filter=st.radio("Hiển thị",["Cần ôn tập","Tất cả","Đã ôn"],horizontal=True,key="card_filter")
-            if card_filter=="Cần ôn tập":
-                st.caption("Hiện gồm các thẻ chưa ôn. Hệ thống chưa lưu thời điểm ôn tiếp theo nên không suy đoán thẻ đến hạn.")
             all_cards=client.request("GET",prefix+"/flashcards").get("flashcards",[])
-            visible=[card for card in all_cards if card_filter=="Tất cả" or
-                     (card_filter=="Đã ôn" and card.get("reviewed")) or
-                     (card_filter=="Cần ôn tập" and card.get("needs_review"))]
-            if not visible:
-                render_verified_empty_state(st, "Chưa có Flashcard", "Không có Flashcard phù hợp với bộ lọc hiện tại.")
-            labels={"AGAIN":"Chưa nhớ","HARD":"Khó nhớ","GOOD":"Nhớ tốt","EASY":"Rất dễ nhớ"}
-            for card in visible:
-                identifier=card["flashcard_id"]
-                reveal_key="card_reveal_"+identifier
-                with st.container(border=True):
-                    st.markdown("<div class='flashcard-study'><span>MẶT TRƯỚC</span><h3>"+escape(card["front_text"])+"</h3></div>",unsafe_allow_html=True)
-                    if not st.session_state.get(reveal_key):
-                        if st.button("Hiển thị đáp án",key="reveal_"+identifier,use_container_width=True):
-                            st.session_state[reveal_key]=True; st.rerun()
-                        continue
-                    st.markdown("<div class='flashcard-study answer'><span>ĐÁP ÁN</span><p>"+escape(card["back_text"])+"</p></div>",unsafe_allow_html=True)
-                    render_citations(st,card.get("sources",[]))
-                    st.caption("Đã ôn" if card.get("reviewed") else "Chưa ôn")
-                    rating=st.radio("Mức độ nhớ",list(labels),format_func=labels.get,horizontal=True,
-                                    key="card_review_"+identifier)
-                    if st.button("Ghi nhận ôn tập",key="record_"+identifier,type="primary"):
-                        pending=st.session_state.setdefault("work_review_ids",{})
-                        key=(identifier,rating); review_id=pending.setdefault(key,uuid4().hex)
-                        client.request("POST","/learning/flashcards/"+identifier+"/reviews",{"rating":rating,"review_id":review_id})
-                        pending.pop(key,None); st.success("Đã ghi nhận ôn tập và cập nhật Progress.")
+            render_flashcard_workspace(client,all_cards)
         except BackendRequestError as error: show_error(error)
     with progress:
         try:
             result=client.request("GET",prefix+"/progress")
             render_learning_tab_header(st, "Tiến độ", "Thành thạo và gợi ý được tính từ Quiz và lượt ôn đã ghi nhận.")
             render_progress_dashboard(result)
-        except BackendRequestError as error: show_error(error)
-    with profile:
-        render_learning_tab_header(st, "Hồ sơ", "Thông tin chỉ đọc của phiên Moodle hiện tại.", "Chỉ đọc")
-        try:
-            profile_data=client.request("GET","/auth/me/profile")
-            st.text_input("Mã người dùng Moodle đã xác minh", value=str(profile_data["moodle_user_id"]), disabled=True)
-            st.caption(f"Được cấp quyền cho {profile_data['course_count']} khóa học trong phiên này.")
-            st.info("DeepTutor không thay đổi hồ sơ hoặc mật khẩu. Hãy dùng luồng quản lý tài khoản Moodle do đơn vị của bạn cung cấp.")
         except BackendRequestError as error: show_error(error)

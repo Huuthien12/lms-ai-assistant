@@ -88,14 +88,18 @@ class VerifiedLearningRepository:
             except Exception:
                 conn.rollback(); raise ValueError("persistence_failure") from None
 
-    def publish_review_batch(self, batch_id, lease_id, scope, cards, chapter_by_card, artifact_payloads):
+    def publish_review_batch(self, batch_id, lease_id, scope, cards, chapter_by_card, artifact_payloads,
+                             *, reused_cards=(), batch_provenance=None):
         """One SQL transaction publishes cards, bindings, mappings, and READY state."""
-        if not cards or len({card.flashcard_id for card in cards})!=len(cards): raise ValueError("invalid_flashcard")
+        cards=list(cards); reused_cards=list(reused_cards)
+        identifiers=[card.flashcard_id for card in cards+reused_cards]
+        if not identifiers or len(identifiers)!=len(set(identifiers)) or set(chapter_by_card)!=set(identifiers) or set(artifact_payloads)!=set(card.flashcard_id for card in cards):
+            raise ValueError("invalid_flashcard")
         now=datetime.now(timezone.utc).replace(tzinfo=None)
         with self.connect() as conn:
             try:
                 cursor=conn.cursor(); cursor.execute("SET XACT_ABORT ON; SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;")
-                batch=cursor.execute("SELECT owner_ref,course_id,status,lease_id FROM dbo.ReviewBatches WITH (UPDLOCK,HOLDLOCK) WHERE batch_id=?",batch_id).fetchone()
+                batch=cursor.execute("SELECT owner_ref,course_id,status,lease_id,provenance_json FROM dbo.ReviewBatches WITH (UPDLOCK,HOLDLOCK) WHERE batch_id=?",batch_id).fetchone()
                 if batch is None: raise ValueError("review_batch_not_found")
                 if batch[0]!=scope.owner_ref or batch[1]!=scope.course_key: raise ValueError("learning_scope_forbidden")
                 if batch[2]=="READY": conn.commit(); return {"batch_id":batch_id,"status":"READY"}
@@ -105,14 +109,34 @@ class VerifiedLearningRepository:
                     artifact=card.model_dump_json()
                     cursor.execute("INSERT INTO dbo.Flashcards (flashcard_id,course_id,topic,created_at,artifact_json) VALUES (?,?,?,?,?)",card.flashcard_id,scope.course_key,card.topic,now,artifact)
                     cursor.execute("INSERT INTO dbo.VerifiedLearningArtifacts (artifact_type,artifact_id,owner_ref,course_id,payload_json) VALUES ('flashcard',?,?,?,?)",card.flashcard_id,scope.owner_ref,scope.course_key,json.dumps(artifact_payloads[card.flashcard_id],ensure_ascii=False,allow_nan=False))
-                    cursor.execute("INSERT INTO dbo.ReviewBatchCards (batch_id,flashcard_id,chapter_id) VALUES (?,?,?)",batch_id,card.flashcard_id,chapter_by_card[card.flashcard_id])
-                cursor.execute("UPDATE dbo.ReviewBatches SET status='READY',lease_id=NULL,updated_at=? WHERE batch_id=? AND lease_id=?",now,batch_id,lease_id)
+                for card in reused_cards:
+                    existing=cursor.execute("SELECT course_id, topic, artifact_json FROM dbo.Flashcards WITH (UPDLOCK,HOLDLOCK) WHERE flashcard_id=?",card.flashcard_id).fetchone()
+                    if existing is None or existing[0]!=scope.course_key or existing[2]!=card.model_dump_json(): raise ValueError("flashcard_context_unavailable")
+                    card.learning_context.scope.require(scope.owner_ref,scope.course_key)
+                for identifier in identifiers:
+                    cursor.execute("INSERT INTO dbo.ReviewBatchCards (batch_id,flashcard_id,chapter_id) VALUES (?,?,?)",batch_id,identifier,chapter_by_card[identifier])
+                provenance=json.loads(batch[4])
+                if batch_provenance: provenance.update(batch_provenance)
+                cursor.execute("UPDATE dbo.ReviewBatches SET status='READY',lease_id=NULL,provenance_json=?,updated_at=? WHERE batch_id=? AND lease_id=?",json.dumps(provenance,ensure_ascii=False,allow_nan=False),now,batch_id,lease_id)
                 if cursor.rowcount!=1: raise ValueError("review_batch_lease_lost")
                 conn.commit(); return {"batch_id":batch_id,"status":"READY"}
             except ValueError:
                 conn.rollback(); raise
             except Exception:
                 conn.rollback(); raise ValueError("persistence_failure") from None
+
+    def flashcard_review_state(self, flashcard_id, scope):
+        """A READY review batch is a new obligation without rewriting review history."""
+        state=self.evidence.latest_review(flashcard_id,scope)
+        with self.connect() as conn:
+            row=conn.cursor().execute(
+                "SELECT MAX(b.updated_at) FROM dbo.ReviewBatchCards c JOIN dbo.ReviewBatches b ON b.batch_id=c.batch_id "
+                "WHERE c.flashcard_id=? AND b.owner_ref=? AND b.course_id=? AND b.status='READY'",
+                flashcard_id,scope.owner_id,scope.course_id).fetchone()
+        required_after=row[0] if row else None
+        if required_after and (not state["last_reviewed_at"] or state["last_reviewed_at"] < required_after.isoformat()):
+            state["needs_review"]=True
+        return state
 
     def fail_review_batch(self, batch_id, lease_id, scope):
         """Release a failed generation for immediate trusted retry without publishing cards."""
@@ -151,6 +175,14 @@ class VerifiedLearningRepository:
         with self.connect() as conn:
             rows=conn.cursor().execute("SELECT question_id,selected_option_id,correct FROM dbo.QuizAnswers WHERE attempt_id=?",identifier).fetchall()
         return [{"question_id":r[0],"selected_option_id":r[1],"correct":bool(r[2])} for r in rows]
+
+    def progress_counts(self, scope):
+        """Read-only owner/course counts for the learner-facing Progress summary."""
+        with self.connect() as conn:
+            cursor=conn.cursor()
+            attempts=cursor.execute("SELECT COUNT(*) FROM dbo.QuizAttempts WHERE student_id=? AND course_id=? AND status='SUBMITTED'",scope.owner_ref,scope.course_key).fetchone()[0]
+            reviews=cursor.execute("SELECT COUNT(*) FROM dbo.FlashcardReviews r JOIN dbo.Flashcards f ON f.flashcard_id=r.flashcard_id WHERE r.student_id=? AND f.course_id=?",scope.owner_ref,scope.course_key).fetchone()[0]
+        return {"completed_quiz_attempts":int(attempts),"reviewed_flashcards":int(reviews)}
 
 
 def context_payload(context): return asdict(context)

@@ -114,6 +114,44 @@ class VerifiedPublicationService:
             try: yield context
             finally: self._receipts.pop(context.context_id,None)
 
+    @contextmanager
+    def provenance_context(self, scope, question, bindings):
+        """Resolve only exact, currently ACTIVE provenance-bound source chunks."""
+        if not isinstance(question,str) or not question.strip() or not isinstance(bindings,set) or not bindings:
+            raise DeepTutorError("invalid_provenance","Trusted provenance is invalid.",status_code=409)
+        with self.ledger._locked():
+            records=active_records(self.ledger._state(),scope)
+            expected=set(bindings); selected=[]
+            by_record={}
+            for source_id,document_id,version,content_hash in expected:
+                matches=[record for record in records if record.document_id==document_id
+                         and record.document_version_id==version
+                         and any(chunk.source_ref==source_id and chunk.content_sha256==content_hash
+                                 for chunk in record.chunk_manifest)]
+                if len(matches)!=1:
+                    raise DeepTutorError("inactive_context","Trusted source is not currently ACTIVE.",status_code=409)
+                by_record.setdefault(matches[0],set()).add((source_id,document_id,version,content_hash))
+            for record,required in by_record.items():
+                try:
+                    raw=self.adapter.manifest(record.provider_publication_ref)
+                except DeepTutorError:
+                    raise
+                except Exception:
+                    raise DeepTutorError("raw_retrieval_unavailable","Full-source runtime is unavailable.",status_code=502) from None
+                available={(chunk.source_ref,chunk.document_id,chunk.document_version_id,chunk.content_sha256):chunk
+                           for chunk in verify_raw_chunks(record,scope,raw)}
+                if not required <= set(available):
+                    raise DeepTutorError("inactive_context","Trusted source is not currently ACTIVE.",status_code=409)
+                selected.extend(available[item] for item in required)
+            context=build_context(scope,question,selected)
+            actual={(chunk.source_ref,chunk.document_id,chunk.document_version_id,chunk.content_sha256)
+                    for chunk in context.chunks}
+            if actual!=expected:
+                raise DeepTutorError("provenance_context_too_large","Trusted source context is unavailable.",status_code=409)
+            self._receipts[context.context_id]=context
+            try: yield context
+            finally: self._receipts.pop(context.context_id,None)
+
     @staticmethod
     def learning_context(context):
         from backend.services.ai.learning_context import LearningScope,LearningSource,VerifiedLearningContext
