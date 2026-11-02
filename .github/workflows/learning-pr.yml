@@ -1,0 +1,58 @@
+name: Learning PR checks
+
+on:
+  pull_request:
+    branches: [project-main]
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  learning-offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install development dependencies
+        run: python -m pip install -r lms-dlu-demo/requirements-dev.txt
+      - name: Compile production modules
+        run: >
+          python -m py_compile
+          backend/services/ai/flashcard_service.py
+          deeptutor_integration/full_source_adapter.py
+          deeptutor_integration/verified_publication.py
+          lms-dlu-demo/learning_evidence.py
+          lms-dlu-demo/learning_generation.py
+          lms-dlu-demo/verified_learning_repository.py
+          lms-dlu-demo/verified_learning_router.py
+          lms-dlu-demo/verified_learning_ui.py
+      # This fixture hard-codes Scripts/python.exe; cover it in a future Windows job.
+      - name: Run offline learning regression
+        run: >
+          python -m pytest -q -p no:cacheprovider
+          -k "not test_full_source_timeout_is_safe_and_forwards_budget"
+          tests/ai/test_flashcard_service.py
+          tests/test_quiz_lifecycle.py
+          tests/ai/test_quiz_semantic_grounding.py
+          tests/test_verified_learning.py
+          tests/test_verified_learning_integration.py
+          tests/test_verified_learning_ui.py
+          tests/test_verified_publication.py
+          tests/test_verified_chat_integration.py
+      - name: Validate pull-request whitespace
+        run: git diff --check origin/${{ github.base_ref }}...HEAD
+      - name: Scan pull-request diff for high-confidence secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --binary --no-ext-diff origin/${{ github.base_ref }}...HEAD | grep -Eqi -- '-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9_]{20,}|gsk_[A-Za-z0-9]{20,}|xox[baprs]-'; then
+            echo "A high-confidence credential signature was detected in the pull-request diff."
+            exit 1
+          fi
