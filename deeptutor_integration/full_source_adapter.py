@@ -11,6 +11,7 @@ from .errors import DeepTutorError
 class FullSourceAdapter(Protocol):
     def publish(self, physical_kb: str, path: Path) -> dict: ...
     def retrieve(self, physical_kb: str, question: str, timeout_seconds: float | None = None) -> dict: ...
+    def manifest(self, physical_kb: str, timeout_seconds: float | None = None) -> dict: ...
 
 
 class DeepTutorFullSourceAdapter:
@@ -57,3 +58,6 @@ class DeepTutorFullSourceAdapter:
 
     def retrieve(self, physical_kb, question, timeout_seconds=None):
         return self._raw("search",physical_kb,question,timeout_seconds)
+
+    def manifest(self, physical_kb, timeout_seconds=None):
+        return self._raw("manifest",physical_kb,timeout_seconds=timeout_seconds)

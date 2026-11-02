@@ -2,6 +2,7 @@
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 import os
+import re
 import time
 from typing import Literal
 from uuid import uuid4
@@ -19,7 +20,7 @@ from deeptutor_integration.document_normalizer import DocumentNormalizer
 from deeptutor_integration.errors import DeepTutorError
 from deeptutor_integration.verified_publication import VerifiedPublicationService
 from quiz_lifecycle import StartAttemptRequest, SubmittedAnswer
-from learning_evidence import FlashcardReviewRequest
+from learning_evidence import FlashcardRegistration, FlashcardReviewRequest
 from verified_learning_repository import context_payload, restore_context
 from verified_chat import verified_chat
 from backend.services.ai.learning_context import LearningScope
@@ -175,27 +176,63 @@ def question_citations(question,citations):
             if isinstance(source,dict) and source.get("source_id") in source_ids]
 
 
+def display_document_title(value, fallback):
+    title=value.strip() if isinstance(value,str) else ""
+    if not title or title.casefold().startswith(("moodle:","resource:")) or title.isdigit(): return fallback
+    return title
+
+
+def chapter_labels(documents):
+    """Label only current verified documents; identifiers remain server-side."""
+    labels={}; used=set()
+    ordered=sorted(documents,key=lambda item:(0,int(item["document_id"])) if str(item.get("document_id","")).isdigit() else (1,str(item.get("document_id",""))))
+    for index,document in enumerate(ordered,1):
+        match=re.search(r"(?:chương|chuong)\s*(\d+)",str(document.get("filename", "")),re.I)
+        label="Chương "+match.group(1) if match else f"Chương {index}"
+        fallback=index
+        while label in used:
+            fallback+=1; label=f"Chương {fallback}"
+        labels[document["document_id"]]=label; used.add(label)
+    return labels
+
+
 @asynccontextmanager
-async def trusted_question_context(publications,access,scope,question):
-    """Issue a fresh receipt only for one unambiguous persisted provenance binding."""
-    provenance=question.get("trusted_provenance") if isinstance(question,dict) else None
-    bindings=provenance.get("bindings") if isinstance(provenance,dict) and provenance.get("version")==1 else None
-    if not isinstance(bindings,list) or not bindings:
+async def trusted_question_context(publications,access,scope,questions):
+    """Issue one receipt covering only exact, persisted wrong-question bindings."""
+    if isinstance(questions,dict): questions=[questions]
+    if not isinstance(questions,list) or not questions:
         raise ValueError("trusted_topic_mapping_unavailable")
-    required={(item.get("source_id"),item.get("chapter_id"),item.get("version"),item.get("content_hash"))
-              for item in bindings if isinstance(item,dict)}
-    if len(required)!=len(bindings) or any(not all(item) for item in required):
-        raise ValueError("trusted_topic_mapping_unavailable")
+    required=set(); texts=[]
+    for question in questions:
+        provenance=question.get("trusted_provenance") if isinstance(question,dict) else None
+        bindings=provenance.get("bindings") if isinstance(provenance,dict) and provenance.get("version")==1 else None
+        if not isinstance(bindings,list) or not bindings:
+            raise ValueError("trusted_topic_mapping_unavailable")
+        bindings_set={(item.get("source_id"),item.get("chapter_id"),item.get("version"),item.get("content_hash"))
+                      for item in bindings if isinstance(item,dict)}
+        question_text=question.get("question") if isinstance(question,dict) else None
+        if len(bindings_set)!=len(bindings) or any(not all(item) for item in bindings_set) or not isinstance(question_text,str) or not question_text.strip():
+            raise ValueError("trusted_topic_mapping_unavailable")
+        required.update(bindings_set); texts.append(question_text)
     chapters={item[1] for item in required}
     if len(chapters)!=1:
         raise ValueError("trusted_topic_mapping_unavailable")
     await run_in_threadpool(access.reauthorize,scope)
-    async with learning_context(publications,scope,next(iter(chapters)),document_id=next(iter(chapters))) as context:
+    lease=publications.provenance_context(scope,"\n".join(texts),required)
+    try:
+        context=await run_in_threadpool(lease.__enter__)
+    except DeepTutorError as error:
+        if error.status_code==409:
+            raise ValueError("trusted_topic_mapping_unavailable") from None
+        raise
+    try:
         actual={(source.source_id,source.document_id,source.version,source.content_hash)
                 for source in publications.learning_context(context).sources}
         if not required <= actual:
             raise ValueError("trusted_topic_mapping_unavailable")
         yield context
+    finally:
+        await run_in_threadpool(lease.__exit__,None,None,None)
 
 
 def create_verified_learning_router(authorizer,publications,repository,orchestrator,chat_service,recommendations,
@@ -241,6 +278,27 @@ def create_verified_learning_router(authorizer,publications,repository,orchestra
             pairs.add((" ".join(card["front_text"].casefold().split()),
                        " ".join(card["back_text"].casefold().split())))
         return pairs
+
+    def normalized_flashcard_pair(card):
+        return (" ".join(card.front_text.casefold().split())," ".join(card.back_text.casefold().split()))
+
+    def verified_source_signature(context):
+        sources=[]
+        for source in context.sources:
+            if source.provenance_status!="verified" or not all((source.source_id,source.document_id,source.version,source.content_hash)):
+                return None
+            sources.append((source.source_id,source.document_id,source.version,source.content_hash))
+        return frozenset(sources) if sources else None
+
+    def reusable_flashcards(scope):
+        candidates={}
+        for item in repository.list("flashcard",scope):
+            card=FlashcardRegistration.model_validate(repository.evidence.flashcard(item["artifact_id"],learning_scope(scope)))
+            signature=verified_source_signature(card.learning_context) if card.learning_context else None
+            if signature:
+                key=(normalized_flashcard_pair(card),signature)
+                candidates[key]=card if key not in candidates else None
+        return candidates
 
     async def owned(kind,identifier,access):
         artifact=await run_in_threadpool(repository.get,kind,identifier)
@@ -443,27 +501,43 @@ def create_verified_learning_router(authorizer,publications,repository,orchestra
             return {"attempt_id":attempt_id,"batch_id":reservation["batch_id"],"status":"READY","flashcards":[]}
         if reservation["status"]=="PENDING" and not reservation.get("lease_id"):
             return {"attempt_id":attempt_id,"batch_id":reservation["batch_id"],"status":"PENDING","flashcards":[]}
-        batch_cards=[]; chapters={}; payloads={}
-        existing_pairs=await run_in_threadpool(saved_flashcard_pairs,scope)
+        batch_cards=[]; reused_cards=[]; chapters={}; payloads={}; display_topics={}; wrong_question_ids={}; contexts={}
+        reusable=await run_in_threadpool(reusable_flashcards,scope)
+        selected={}
         generation=LearningGenerationService(quizzes,cards,repository.quizzes,repository.evidence,
             context_validator=lambda scoped,learning: publications.validate_learning_context(scoped,learning,access))
         try:
             for chapter,items in grouped.items():
-                async with trusted_question_context(publications,access,scope,items[0]) as context:
-                    learning=VerifiedPublicationService.learning_context(context)
-                    prepared=await generation.prepare_flashcards(learning.scope,learning,topic=chapter,count=5,difficulty="medium",
-                        existing_pairs=existing_pairs,
-                        correlation_id=getattr(http_request.state,"learning_correlation_id",uuid4().hex))
-                    for card in prepared["_cards"]:
-                        existing_pairs.add((" ".join(card.front_text.casefold().split()),
-                                            " ".join(card.back_text.casefold().split())))
-                        batch_cards.append(card); chapters[card.flashcard_id]=chapter; payloads[card.flashcard_id]={"context":context_payload(context)}
-            result=await run_in_threadpool(repository.publish_review_batch,reservation["batch_id"],reservation["lease_id"],scope,batch_cards,chapters,payloads)
+                for item in items:
+                    async with trusted_question_context(publications,access,scope,item) as context:
+                        learning=VerifiedPublicationService.learning_context(context)
+                        filename=next((source.filename for source in context.chunks if source.filename.strip()),None)
+                        review_question={"question_id":item["question_id"],"question":item["question"],"explanation":item["explanation"]}
+                        prepared=await generation.prepare_flashcards(learning.scope,learning,topic=chapter,count=1,difficulty="medium",
+                            review_question=review_question,
+                            correlation_id=getattr(http_request.state,"learning_correlation_id",uuid4().hex))
+                        for card in prepared["_cards"]:
+                            key=(normalized_flashcard_pair(card),verified_source_signature(learning))
+                            selected_card=selected.get(key) or reusable.get(key) or card
+                            if key not in selected:
+                                selected[key]=selected_card
+                                if selected_card is card:
+                                    batch_cards.append(card)
+                                else:
+                                    reused_cards.append(selected_card)
+                                chapters[selected_card.flashcard_id]=chapter
+                                display_topics[selected_card.flashcard_id]=display_document_title(filename.rsplit(".",1)[0] if isinstance(filename,str) else None,"Ôn tập Quiz")
+                                contexts[selected_card.flashcard_id]=context_payload(context)
+                            wrong_question_ids.setdefault(selected_card.flashcard_id,[]).append(item["question_id"])
+                            if selected_card is card:
+                                payloads[card.flashcard_id]={"context":context_payload(context),"wrong_question_ids":wrong_question_ids[card.flashcard_id],"display_topic":display_topics[card.flashcard_id]}
+            result=await run_in_threadpool(repository.publish_review_batch,reservation["batch_id"],reservation["lease_id"],scope,batch_cards,chapters,payloads,
+                reused_cards=reused_cards,batch_provenance={"wrong_question_ids_by_card":wrong_question_ids,"contexts_by_card":contexts})
         except Exception:
             await run_in_threadpool(repository.fail_review_batch,reservation["batch_id"],reservation["lease_id"],scope)
             raise
         return {"attempt_id":attempt_id,"batch_id":result["batch_id"],"status":result["status"],"flashcards":[
-            {"flashcard_id":card.flashcard_id,"front_text":card.front_text,"back_text":card.back_text,"topic":card.topic} for card in batch_cards]}
+            {"flashcard_id":card.flashcard_id,"front_text":card.front_text,"back_text":card.back_text,"topic":display_topics[card.flashcard_id]} for card in batch_cards+reused_cards]}
 
     @router.post("/courses/{course_id}/flashcards")
     async def generate_cards(course_id:str,request:GenerationInput,http_request:Request,access=Depends(authorizer)):
@@ -506,12 +580,18 @@ def create_verified_learning_router(authorizer,publications,repository,orchestra
     @router.get("/courses/{course_id}/flashcards")
     def list_cards(course_id:str,access=Depends(authorizer)):
         scope=access.scope(course_id)
+        labels=chapter_labels(publications.documents(scope))
         result=[]
         for item in repository.list("flashcard",scope):
             card=repository.evidence.flashcard(item["artifact_id"],learning_scope(scope))
             result.append({key:card[key] for key in ("flashcard_id","front_text","back_text","topic")})
+            payload=repository.get("flashcard",item["artifact_id"])["payload"]
+            if isinstance(payload.get("display_topic"),str): result[-1]["display_topic"]=payload["display_topic"]
             result[-1]["sources"]=card["learning_context"]["sources"] if card.get("learning_context") else []
-            result[-1].update(repository.evidence.latest_review(item["artifact_id"],learning_scope(scope)))
+            document_ids={source.get("document_id") for source in result[-1]["sources"]
+                          if isinstance(source,dict) and source.get("document_id") in labels}
+            if len(document_ids)==1: result[-1]["chapter_label"]=labels[document_ids.pop()]
+            result[-1].update(repository.flashcard_review_state(item["artifact_id"],learning_scope(scope)))
         return {"flashcards":result}
 
     @router.post("/flashcards/{flashcard_id}/reviews")
@@ -527,9 +607,30 @@ def create_verified_learning_router(authorizer,publications,repository,orchestra
         except ValueError as error:
             if str(error)!="mastery_not_found": raise
             topics=[]
+        documents=publications.documents(scope)
+        topics_by_document={item["topic"]:item for item in topics if isinstance(item.get("topic"),str)}
+        ranked=recommendations.rank_rule_first(topics)
+        recommendations_by_document={item["topic"]:item for item in ranked if isinstance(item.get("topic"),str)}
+        projected=[]
+        for document in documents:
+            document_id=document["document_id"]
+            mastery=topics_by_document.get(document_id)
+            recommendation=recommendations_by_document.get(document_id)
+            projected.append({"title":display_document_title(document.get("filename"),"Tài liệu đã xác minh"),
+                              "mastery_score":mastery.get("mastery_score") if mastery else None,
+                              "level":mastery.get("level") if mastery else None,
+                              "confidence":mastery.get("confidence") if mastery else None,
+                              "activity_count":mastery.get("evidence_count") if mastery else 0,
+                              "recommendation":recommendation})
+        scored=[item for item in projected if isinstance(item["mastery_score"],(int,float)) and type(item["activity_count"]) is int and item["activity_count"]>0]
+        overall=(sum(item["mastery_score"]*item["activity_count"] for item in scored)/sum(item["activity_count"] for item in scored)
+                 if projected and len(scored)==len(projected) else None)
+        summary={"accessible_document_count":len(projected),**repository.progress_counts(scope),
+                 "overall_mastery":overall,
+                 "documents_needing_review":[item["title"] for item in projected if item["level"] in {"WEAK","DEVELOPING"}]}
         # Rule recommendations use server evidence only; no extra generation or ML claim.
         return {"owner_ref":scope.owner_ref,"course_id":scope.course_key,"topics":topics,
-                "recommendations":recommendations.rank_rule_first(topics),
+                "recommendations":ranked,"summary":summary,"documents":projected,
                 "mastery_model":"heuristic/rule-based",
                 "mastery_policy":repository.evidence.mastery.policy_metadata()}
 

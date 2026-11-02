@@ -15,7 +15,7 @@ from backend.services.ai.recommendation_service import RecommendationService
 from quiz_lifecycle import QuizRepository
 from learning_evidence import LearningEvidenceRepository
 from verified_learning_repository import VerifiedLearningRepository, restore_context
-from verified_learning_router import create_verified_learning_router, question_citations
+from verified_learning_router import create_verified_learning_router, question_citations, display_document_title, chapter_labels
 from verified_identity_router import create_identity_router
 from course_query_auth import create_moodle_query_authorizer
 from deeptutor_integration.service import DeepTutorService
@@ -68,7 +68,9 @@ def learning(runtime):
             content=json.dumps({"questions":questions})
         elif "flashcards" in system:
             request=json.loads(kwargs["prompt"]); count=request["count"]
-            cards=([{"front_text":"Python?","back_text":"Language","topic":"model topic","difficulty":"hard"}]
+            review=request.get("review_question")
+            cards=([{"front_text":review["question"],"back_text":review["explanation"],"topic":"model topic","difficulty":"medium"}]
+                   if review else [{"front_text":"Python?","back_text":"Language","topic":"model topic","difficulty":"hard"}]
                    if count==1 else [{"front_text":f"Python {request['topic']} {i}","back_text":"Verified Python lessons","topic":"model topic","difficulty":"medium"} for i in range(count)])
             content=json.dumps({"flashcards":cards})
         elif "already-known grading result" in system:
@@ -96,6 +98,17 @@ def test_question_citations_use_only_the_question_source_id():
     assert question_citations({},citations) == []
 
 
+def test_document_title_projection_hides_technical_identifiers():
+    assert display_document_title("Lecture 1.pdf","Tài liệu đã xác minh")=="Lecture 1.pdf"
+    assert display_document_title("moodle:802c:resource:16","Tài liệu đã xác minh")=="Tài liệu đã xác minh"
+    assert display_document_title("16","Tài liệu đã xác minh")=="Tài liệu đã xác minh"
+
+
+def test_chapter_labels_use_verified_document_membership_without_raw_identifiers():
+    labels=chapter_labels([{"document_id":"16","filename":"Chương 2.pdf"},{"document_id":"17","filename":"lecture.md"}])
+    assert labels=={"16":"Chương 2","17":"Chương 3"}
+
+
 def test_chat_quiz_grade_evidence_progress_and_explanation_vertical_flow(learning):
     client,store,state,orch,pub,_=learning
     reply=client.post("/learning/courses/INT1339/chat",headers=headers(),json={"question":"Python?"})
@@ -118,16 +131,93 @@ def test_chat_quiz_grade_evidence_progress_and_explanation_vertical_flow(learnin
 
 
 def test_post_quiz_review_flashcards_uses_server_wrong_answers_and_is_idempotent(learning):
-    client,_,state,orch,_,_=learning
-    quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).json()
+    client,_,state,orch,_,adapter=learning
+    quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json={**generation(),"count":3}).json()
     attempt=client.post(f"/learning/quizzes/{quiz['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
-    client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[{"question_id":quiz["questions"][0]["question_id"],"selected_option_id":"B"}]})
+    client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[{"question_id":item["question_id"],"selected_option_id":"B"} for item in quiz["questions"]]})
+    adapter.retrieve.reset_mock(); adapter.manifest.reset_mock()
+    adapter.retrieve.side_effect=lambda *_args,**_kwargs: {"chunks":[]}
     created=client.post(f"/learning/attempts/{attempt}/review-flashcards",headers=headers())
     assert created.status_code==200,created.text
     body=created.json(); assert body["status"]=="READY" and body["flashcards"]
     assert "correct_option_id" not in created.text and state["cards"]
+    assert {card["topic"] for card in body["flashcards"]}=={"lecture"}
+    linked={json.loads(payload)["wrong_question_ids"][0] for (kind,_),(_,_,payload) in state["bindings"].items() if kind=="flashcard"}
+    assert linked=={item["question_id"] for item in quiz["questions"]}
+    listed=client.get("/learning/courses/INT1339/flashcards",headers=headers()).json()["flashcards"]
+    assert {card.get("chapter_label") for card in listed}=={"Chương 1"}
+    adapter.retrieve.assert_not_called()
+    assert adapter.manifest.call_count==3
     again=client.post(f"/learning/attempts/{attempt}/review-flashcards",headers=headers())
     assert again.json()=={"attempt_id":attempt,"batch_id":body["batch_id"],"status":"READY","flashcards":[]}
+
+
+@pytest.mark.parametrize("final_rating",["HARD","GOOD","EASY"])
+def test_post_quiz_review_reuses_and_reactivates_same_verified_card(learning,final_rating):
+    client,_,state,orch,_,_=learning
+    first_quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).json()
+    first_attempt=client.post(f"/learning/quizzes/{first_quiz['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    client.post(f"/learning/attempts/{first_attempt}/submit",headers=headers(),json={"answers":[{"question_id":first_quiz["questions"][0]["question_id"],"selected_option_id":"B"}]})
+    first=client.post(f"/learning/attempts/{first_attempt}/review-flashcards",headers=headers()).json()
+    card_id=first["flashcards"][0]["flashcard_id"]
+    path=f"/learning/flashcards/{card_id}/reviews"
+    assert client.post(path,headers=headers(),json={"rating":"GOOD","review_id":"first-good"}).status_code==200
+    assert client.get("/learning/courses/INT1339/flashcards",headers=headers()).json()["flashcards"][0]["needs_review"] is False
+    history_before=dict(state["reviews"])
+
+    second_quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).json()
+    second_attempt=client.post(f"/learning/quizzes/{second_quiz['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    client.post(f"/learning/attempts/{second_attempt}/submit",headers=headers(),json={"answers":[{"question_id":second_quiz["questions"][0]["question_id"],"selected_option_id":"B"}]})
+    created=client.post(f"/learning/attempts/{second_attempt}/review-flashcards",headers=headers())
+    assert created.status_code==200
+    second=created.json(); assert [card["flashcard_id"] for card in second["flashcards"]]==[card_id]
+    assert len(state["cards"])==1 and len(state["batch_cards"])==2 and state["reviews"]==history_before
+    batch=next(row for row in state["batches"].values() if row[0]==second_attempt)
+    assert json.loads(batch[5])["wrong_question_ids_by_card"][card_id]==[second_quiz["questions"][0]["question_id"]]
+    active=client.get("/learning/courses/INT1339/flashcards",headers=headers()).json()["flashcards"][0]
+    assert active["flashcard_id"]==card_id and active["latest_rating"]=="GOOD" and active["needs_review"] is True
+    orch.generate.reset_mock()
+    assert client.post(f"/learning/attempts/{second_attempt}/review-flashcards",headers=headers()).json()=={"attempt_id":second_attempt,"batch_id":second["batch_id"],"status":"READY","flashcards":[]}
+    orch.generate.assert_not_awaited()
+    assert client.post(path,headers=headers(),json={"rating":"AGAIN","review_id":"second-again"}).status_code==200
+    assert client.get("/learning/courses/INT1339/flashcards",headers=headers()).json()["flashcards"][0]["needs_review"] is True
+    assert client.post(path,headers=headers(),json={"rating":final_rating,"review_id":"second-final-"+final_rating}).status_code==200
+    completed=client.get("/learning/courses/INT1339/flashcards",headers=headers()).json()["flashcards"][0]
+    assert completed["needs_review"] is False and len(state["reviews"])==3
+    assert len([event for event in state["events"] if event["type"]=="flashcard"])==3
+
+
+def test_post_quiz_review_batch_can_mix_reused_and_new_cards(learning):
+    client,_,state,_,_,_=learning
+    original=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).json()
+    first_attempt=client.post(f"/learning/quizzes/{original['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    client.post(f"/learning/attempts/{first_attempt}/submit",headers=headers(),json={"answers":[{"question_id":original["questions"][0]["question_id"],"selected_option_id":"B"}]})
+    reused_id=client.post(f"/learning/attempts/{first_attempt}/review-flashcards",headers=headers()).json()["flashcards"][0]["flashcard_id"]
+
+    quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json={**generation(),"count":2}).json()
+    attempt=client.post(f"/learning/quizzes/{quiz['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[{"question_id":question["question_id"],"selected_option_id":"B"} for question in quiz["questions"]]})
+    created=client.post(f"/learning/attempts/{attempt}/review-flashcards",headers=headers()).json()
+    identifiers={card["flashcard_id"] for card in created["flashcards"]}
+    assert created["status"]=="READY" and reused_id in identifiers and len(identifiers)==2
+    assert len(state["cards"])==2
+    assert {card_id for batch_id,card_id,_ in state["batch_cards"] if batch_id==created["batch_id"]}==identifiers
+
+
+def test_mixed_reuse_batch_rolls_back_without_partial_cards(learning):
+    client,_,state,_,_,_=learning
+    original=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).json()
+    first_attempt=client.post(f"/learning/quizzes/{original['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    client.post(f"/learning/attempts/{first_attempt}/submit",headers=headers(),json={"answers":[{"question_id":original["questions"][0]["question_id"],"selected_option_id":"B"}]})
+    client.post(f"/learning/attempts/{first_attempt}/review-flashcards",headers=headers())
+    before_cards=set(state["cards"]); before_mappings=set(state["batch_cards"])
+    quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json={**generation(),"count":2}).json()
+    attempt=client.post(f"/learning/quizzes/{quiz['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[{"question_id":question["question_id"],"selected_option_id":"B"} for question in quiz["questions"]]})
+    state["fail_batch_card"]=True
+    failed=client.post(f"/learning/attempts/{attempt}/review-flashcards",headers=headers())
+    assert failed.status_code==503 and set(state["cards"])==before_cards and state["batch_cards"]==before_mappings
+    assert next(row for row in state["batches"].values() if row[0]==attempt)[3]=="FAILED"
 
 
 def test_post_quiz_review_flashcards_all_correct_skips_provider(learning):
@@ -154,6 +244,25 @@ def test_progress_recommendations_are_authenticated_ranked_and_public_safe(learn
     assert body["recommendations"][0]["rank"]==1 and body["recommendations"][0]["level"]=="INSUFFICIENT_EVIDENCE"
     assert "correct_option_id" not in response.text and "answer_key" not in response.text
     assert client.get("/learning/courses/INT1339/recommendations",headers=headers("B")).status_code==403
+
+
+def test_progress_projects_current_documents_without_exposing_stale_topic_ids(learning):
+    client,_,state,_,pub,_=learning
+    pub.publish(AuthorizedCourseScope(9,"INT1339","int1339-python","owner","https://moodle.test"),
+                document("Verified Java lessons.").model_copy(update={"document_id":"2","original_filename":"chapter-two.md"}))
+    quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json={**generation(),"scope_mode":"chapter","chapter_id":"1"}).json()
+    attempt=client.post(f"/learning/quizzes/{quiz['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[{"question_id":quiz["questions"][0]["question_id"],"selected_option_id":"B"}]})
+    state["mastery"][("A","INT1339","moodle:retired:resource:16")]=(99,"MASTERED","HIGH",8,"2026-01-01")
+    response=client.get("/learning/courses/INT1339/progress",headers=headers())
+    assert response.status_code==200
+    body=response.json()
+    assert body["summary"]["accessible_document_count"]==2 and body["summary"]["completed_quiz_attempts"]==1
+    documents={item["title"]:item for item in body["documents"]}
+    assert set(documents)=={"lecture.md","chapter-two.md"}
+    assert documents["lecture.md"]["activity_count"]==1 and documents["chapter-two.md"]["activity_count"]==0
+    assert all("moodle:" not in item["title"] for item in body["documents"])
+    assert client.get("/learning/courses/OTHER/progress",headers=headers()).status_code==403
 
 
 def test_post_quiz_review_flashcards_denies_foreign_owner_and_unsubmitted_attempt(learning):
@@ -201,6 +310,17 @@ def test_post_quiz_review_flashcards_provider_failure_keeps_batch_unpublished(le
     assert state["batches"] and next(iter(state["batches"].values()))[3]=="FAILED"
 
 
+def test_post_quiz_review_flashcards_rejects_irrelevant_card_without_partial_publish(learning):
+    client,_,state,orch,_,_=learning
+    quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).json()
+    attempt=client.post(f"/learning/quizzes/{quiz['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
+    client.post(f"/learning/attempts/{attempt}/submit",headers=headers(),json={"answers":[{"question_id":quiz["questions"][0]["question_id"],"selected_option_id":"B"}]})
+    orch.generate.side_effect=lambda **_: LLMResult("success","groq","qwen",json.dumps({"flashcards":[{"front_text":"Generic architecture","back_text":"General guidance","topic":"generic","difficulty":"medium"}]}),0)
+    response=client.post(f"/learning/attempts/{attempt}/review-flashcards",headers=headers())
+    assert response.status_code==502 and response.json()["detail"]["code"]=="INVALID_FLASHCARD_SCHEMA"
+    assert not state["cards"] and next(iter(state["batches"].values()))[3]=="FAILED"
+
+
 def test_post_quiz_review_flashcards_rejects_deleted_active_source(learning):
     client,_,_,orch,pub,_=learning
     quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json=generation()).json()
@@ -211,7 +331,7 @@ def test_post_quiz_review_flashcards_rejects_deleted_active_source(learning):
     scope=AuthorizedCourseScope(record.moodle_course_id,record.course_id,record.kb_id,"owner",record.source_namespace)
     pub.delete(scope,"1"); orch.generate.reset_mock()
     response=client.post(f"/learning/attempts/{attempt}/review-flashcards",headers=headers())
-    assert response.status_code==422 and response.json()["detail"]=={"code":"invalid_chapter","message":"The selected chapter is not an active publication."}
+    assert response.status_code==409 and response.json()["detail"]=={"code":"trusted_topic_mapping_unavailable","message":"Learning request could not be completed."}
     assert not orch.generate.await_count
 
 
@@ -232,7 +352,7 @@ def test_post_quiz_review_flashcards_rejects_stale_source_binding(learning):
 def test_post_quiz_review_flashcards_groups_distinct_trusted_chapters(learning):
     client,_,state,_,pub,_=learning
     pub.publish(AuthorizedCourseScope(9,"INT1339","int1339-python","owner","https://moodle.test"),
-                document("Verified Java lessons cover classes interfaces modules.").model_copy(update={"document_id":"2","original_filename":"chapter-two.md"}))
+                document("Verified Java lessons cover classes interfaces modules.").model_copy(update={"document_id":"2","original_filename":"Chương 2.pdf"}))
     quiz=client.post("/learning/courses/INT1339/quizzes",headers=headers(),json={**generation(),"count":2}).json()
     attempt=client.post(f"/learning/quizzes/{quiz['quiz_id']}/attempts",headers=headers()).json()["attempt_id"]
     answers=[{"question_id":question["question_id"],"selected_option_id":"B"} for question in quiz["questions"]]
@@ -247,8 +367,10 @@ def test_post_quiz_review_flashcards_groups_distinct_trusted_chapters(learning):
     definition[3]=json.dumps(questions); state["definitions"][quiz["quiz_id"]]=tuple(definition)
     response=client.post(f"/learning/attempts/{attempt}/review-flashcards",headers=headers())
     assert response.status_code==200,response.text
-    body=response.json(); assert body["status"]=="READY" and len(body["flashcards"])==10
+    body=response.json(); assert body["status"]=="READY" and len(body["flashcards"])==2
     assert {row[2] for row in state["batch_cards"]}=={"1","2"}
+    listed=client.get("/learning/courses/INT1339/flashcards",headers=headers()).json()["flashcards"]
+    assert {card["chapter_label"] for card in listed}=={"Chương 1","Chương 2"}
 
 
 def test_post_quiz_review_flashcards_reports_active_reservation_as_pending(learning):
@@ -328,6 +450,10 @@ def test_flashcard_content_persists_and_review_evidence_is_idempotent(learning):
     assert reviewed["latest_rating"]=="GOOD"
     progress=client.get("/learning/courses/INT1339/progress",headers=headers()).json()
     assert progress["topics"][0]["mastery_score"]==75
+    assert client.post(path,headers=headers(),json={"rating":"AGAIN","review_id":"again"}).status_code==200
+    after_again=client.get("/learning/courses/INT1339/flashcards",headers=headers()).json()["flashcards"][0]
+    assert after_again["reviewed"] is True and after_again["needs_review"] is True and after_again["latest_rating"]=="AGAIN"
+    assert len(state["events"])==2
     before=deepcopy(state)
     assert client.post(path,headers=headers("B"),json={"rating":"EASY","review_id":"spoof"}).status_code==403
     assert state==before

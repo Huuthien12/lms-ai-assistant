@@ -145,7 +145,7 @@ class LearningEvidenceRepository:
                 flashcard_id,scope.owner_id).fetchone()
         return {"reviewed":row is not None,"latest_rating":row[0] if row else None,
                 "last_reviewed_at":row[1].isoformat() if row and hasattr(row[1],"isoformat") else (str(row[1]) if row else None),
-                "needs_review":row is None,"review_schedule_supported":False}
+                "needs_review":row is None or row[0]=="AGAIN","review_schedule_supported":False}
 
     def review(self, flashcard_id: str, request: FlashcardReviewRequest, *, scope: LearningScope) -> dict[str, Any]:
         scope.require(request.student_id, scope.course_id)

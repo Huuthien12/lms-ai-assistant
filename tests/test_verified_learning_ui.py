@@ -7,7 +7,8 @@ import pytest
 from streamlit.testing.v1 import AppTest
 from deeptutor_client import RealDeepTutorClient, BackendRequestError
 from verified_learning_ui import (VerifiedSession, display_quiz_text, progress_label, progress_percent,
-                                  progress_updated_at, session_messages, clear_scoped_work_state)
+                                  progress_updated_at, session_messages, clear_scoped_work_state,
+                                  flashcard_decks, flashcard_saved_decks, flashcard_study_cards, normalize_verified_tab)
 from ui.components import course_display_name, quiz_document_titles, render_verified_dashboard, render_verified_empty_state, render_verified_topbar
 from test_verified_learning_integration import learning, runtime
 
@@ -42,8 +43,10 @@ def test_authenticated_streamlit_chat_quiz_grade_progress_and_logout(ui):
     assert next(item for item in ui.selectbox if item.label=="Khóa học của tôi").options==["Lập trình Python"]
     assert ui.session_state["verified_course"]=="INT1339"
     assert any(metric.label=="Tài liệu ACTIVE" and metric.value=="1" for metric in ui.metric)
-    assert any(input.label=="Mã người dùng Moodle đã xác minh" and input.disabled for input in ui.text_input)
+    assert "Hồ sơ" not in [tab.label for tab in ui.tabs]
+    assert [tab.label for tab in ui.tabs]==["Tổng quan","Tài liệu","AI Tutor","Quiz","Flashcards","Progress"]
     assert [radio.label for radio in ui.radio].count("Phạm vi kiến thức")==2
+    assert all("moodle:" not in item.value for item in ui.markdown if isinstance(item.value,str))
     assert any(select.label=="Chọn chương" for select in ui.selectbox)
     ui.chat_input[0].set_value("Explain Python").run()
     assert not ui.exception
@@ -70,13 +73,13 @@ def test_authenticated_streamlit_chat_quiz_grade_progress_and_logout(ui):
     ui.number_input[1].set_value(1)
     button(ui,"Tạo Flashcards").click().run()
     assert not ui.exception and any("Python?" in item.value for item in ui.markdown)
+    saved_filter=next(select for select in ui.selectbox if select.label=="Xem thẻ đã lưu")
+    assert list(saved_filter.options)==["Hàng đợi hiện tại","Tất cả thẻ đã lưu","Chưa đánh giá","Chưa nhớ","Khó nhớ","Nhớ tốt","Rất dễ nhớ"]
     button(ui,"Hiển thị đáp án").click().run()
     review_radio=next(radio for radio in ui.radio if radio.label=="Mức độ nhớ")
     assert list(review_radio.options)==["Chưa nhớ","Khó nhớ","Nhớ tốt","Rất dễ nhớ"]
     button(ui,"Ghi nhận ôn tập").click().run()
-    assert not ui.exception and ui.success
-    next(radio for radio in ui.radio if radio.label=="Hiển thị").set_value("Đã ôn").run()
-    assert any("Python?" in item.value for item in ui.markdown)
+    assert not ui.exception
     ui.run()
     assert not ui.json
     assert any(m.label=="Mức độ thành thạo" for m in ui.metric)
@@ -106,12 +109,40 @@ def test_streamlit_post_quiz_flashcard_review_action(ui):
     assert not ui.exception and ui.session_state["work_review_batch"]["status"]=="READY"
 
 
+def test_flashcard_workspace_uses_real_topic_decks_and_modes():
+    cards=[
+        {"flashcard_id":"a","topic":"moodle:raw","display_topic":"Chương 2.pdf","chapter_label":"Chương 2","needs_review":True,"reviewed":False},
+        {"flashcard_id":"b","topic":"other","chapter_label":"Chương 2","needs_review":False,"reviewed":True,"latest_rating":"GOOD"},
+        {"flashcard_id":"c","topic":"HTTP","chapter_label":"Chương 1","needs_review":True,"reviewed":True,"latest_rating":"AGAIN"},
+        {"flashcard_id":"d","topic":"HTTP","chapter_label":"Chương 1","needs_review":False,"reviewed":True,"latest_rating":"HARD"},
+        {"flashcard_id":"e","topic":"HTTP","chapter_label":"Chương 1","needs_review":False,"reviewed":True,"latest_rating":"EASY"},
+        {"flashcard_id":"f","topic":"HTTP","chapter_label":"Chương 3","needs_review":False,"reviewed":True,"latest_rating":"GOOD"},
+        {"flashcard_id":"historical","topic":"moodle:retired","needs_review":True,"reviewed":False},
+    ]
+    assert {name:len(items) for name,items in flashcard_decks(cards).items()}=={"Chương 1":1,"Chương 2":1}
+    assert {name:len(items) for name,items in flashcard_saved_decks(cards).items()}=={"Chương 1":3,"Chương 2":2,"Chương 3":1}
+    assert [card["flashcard_id"] for card in flashcard_study_cards(cards,"Chương 2","Học lần lượt")]==["a"]
+    assert [card["flashcard_id"] for card in flashcard_study_cards(cards,"Chương 2","Chỉ thẻ chưa nhớ")]==["a"]
+    assert sorted(card["flashcard_id"] for card in flashcard_study_cards(cards,"Tất cả","Học ngẫu nhiên"))==["a","c"]
+    assert sorted(card["flashcard_id"] for card in flashcard_study_cards(cards,"Tất cả","Học lần lượt","ALL"))==["a","b","c","d","e","f"]
+    assert sorted(card["flashcard_id"] for card in flashcard_study_cards(cards,"Tất cả","Học lần lượt","GOOD"))==["b","f"]
+    assert [card["flashcard_id"] for card in flashcard_study_cards(cards,"Chương 3","Học lần lượt","ALL")]==["f"]
+    assert [card["flashcard_id"] for card in flashcard_study_cards(cards,"Tất cả","Học lần lượt","AGAIN")]==["c"]
+    assert flashcard_study_cards(cards,"Tất cả","Chỉ thẻ chưa nhớ","GOOD")==[]
+
+
 def test_course_scope_cleanup_tolerates_streamlit_widget_state_removal():
     class TransientState(dict):
         def __iter__(self): return iter(("work_quiz", "card_review_removed", "safe"))
     state=TransientState(work_quiz="quiz",safe="keep")
     clear_scoped_work_state(state)
     assert state=={"safe":"keep"}
+
+
+def test_legacy_profile_tab_state_redirects_to_overview():
+    state={"verified_learning_tab":"Hồ sơ"}
+    normalize_verified_tab(state)
+    assert state["verified_learning_tab"]=="Tổng quan"
 
 
 def test_quiz_and_flashcard_number_inputs_stay_within_limits(ui):

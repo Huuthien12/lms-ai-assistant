@@ -122,6 +122,7 @@ class LearningGenerationService:
     async def prepare_flashcards(self, scope: LearningScope, context: VerifiedLearningContext,
                                  *, topic: str, count: int, difficulty: str,
                                  existing_pairs: set[tuple[str,str]] | None = None,
+                                 review_question: dict[str,str] | None = None,
                                  correlation_id: str | None = None, timeout_seconds: float | None = None,
                                  deadline: float | None = None, temperature: float = 0.1,
                                  max_tokens: int = 1536):
@@ -133,6 +134,7 @@ class LearningGenerationService:
             topic=topic, count=count, difficulty=difficulty, retrieved_context=context.text,
             source_metadata=context.source_metadata(),correlation_id=correlation_id,
             temperature=temperature,max_tokens=max_tokens,
+            **({"review_question":review_question} if review_question is not None else {}),
             **({"timeout_seconds":timeout_seconds} if timeout_seconds is not None else {}),
         ))
         existing_pairs=existing_pairs or set()
@@ -158,7 +160,8 @@ class LearningGenerationService:
             record_generation_stage("flashcard",correlation_id,"persistence","not_reached",0)
             raise ValueError("LEARNING_GENERATION_TIMEOUT")
         return {"course_id": scope.course_id,"requested_count":count,
-                "created_count":len(cards),"skipped_duplicate_count":count-len(cards),"_cards":cards,"flashcards": [
+                "created_count":len(cards),"skipped_duplicate_count":count-len(cards),"_cards":cards,
+                "_wrong_question_by_card":{card.flashcard_id:review_question["question_id"] for card in cards} if review_question else {},"flashcards": [
             {"flashcard_id": card.flashcard_id, "front_text": card.front_text,
              "back_text": card.back_text, "topic": card.topic,
              "sources": context.source_metadata()} for card in cards]}
@@ -166,6 +169,7 @@ class LearningGenerationService:
     async def generate_flashcards(self,*args,**kwargs):
         prepared=await self.prepare_flashcards(*args,**kwargs)
         cards=prepared.pop("_cards")
+        prepared.pop("_wrong_question_by_card",None)
         correlation_id=kwargs.get("correlation_id") or "flashcard"
         started=time.monotonic(); record_generation_stage("flashcard",correlation_id,"persistence","started",0)
         try: await asyncio.to_thread(self.evidence.register_flashcards,cards)

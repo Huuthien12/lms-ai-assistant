@@ -94,8 +94,10 @@ def inject_theme(st) -> None:
         .verified-empty-state {{ display:grid; place-items:center; gap:.45rem; min-height:154px; margin:.75rem 0; padding:1.4rem; border:1px dashed #B9CBE6; border-radius:16px; color:#526B8A; background:#FBFDFF; text-align:center; }}
         .verified-empty-state > span {{ display:grid; place-items:center; width:34px; height:34px; border:1px solid #C8D9F0; border-radius:50%; color:#1565C0; font-size:1.3rem; }}
         .verified-empty-state h3 {{ margin:0; color:#102A55; font-size:1rem; }} .verified-empty-state p {{ max-width:34rem; margin:0; line-height:1.5; }}
-        .flashcard-study {{ min-height:150px; display:grid; align-content:center; gap:.7rem; padding:1.35rem 1.5rem; border:1px solid #DCE6F5; border-radius:16px; background:linear-gradient(135deg,#FFFFFF,#EEF6FF); text-align:center; }}
-        .flashcard-study span {{ color:#4F46E5; font-size:.7rem; font-weight:800; letter-spacing:.1em; }} .flashcard-study h3 {{ margin:0; color:#102A55; font-size:1.35rem; }} .flashcard-study.answer {{ min-height:auto; margin-top:.8rem; background:#fff; }} .flashcard-study.answer p {{ margin:0; color:#334155; line-height:1.55; }}
+        .flashcard-study {{ min-height:220px; display:grid; align-content:center; gap:.8rem; padding:1.6rem; border:1px solid #D6E4F5; border-radius:18px; background:#F8FBFF; text-align:center; overflow-wrap:anywhere; }}
+        .flashcard-study span {{ color:#1565C0; font-size:.75rem; font-weight:800; letter-spacing:.08em; }} .flashcard-study h3 {{ margin:0; color:#102A55; font-size:1.5rem; line-height:1.35; }} .flashcard-study.answer {{ min-height:auto; margin-top:1rem; background:#FFFFFF; }} .flashcard-study.answer p {{ margin:0; color:#334155; line-height:1.6; overflow-wrap:anywhere; }}
+        [data-testid="stVerticalBlockBorderWrapper"]:has(.flashcard-study) {{ border-radius:20px; border-color:#DCE6F5; background:#FFFFFF; padding:1rem; box-shadow:0 8px 22px rgba(21,101,192,.06); }}
+        [data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .flashcard-study) [data-testid="stButton"] button {{ min-height:42px; border-radius:10px; }}
         [class*="st-key-course_card_"] {{ padding:.35rem; border:1px solid #DCE6F5; border-radius:15px; background:#fff;
           box-shadow:0 2px 10px rgba(15,23,42,.045); transition:transform 160ms ease,box-shadow 160ms ease,border-color 160ms ease; }}
         [class*="st-key-course_card_"]:hover {{ transform:translateY(-2px); border-color:#A5B4FC; box-shadow:0 10px 24px rgba(49,46,129,.10); }}

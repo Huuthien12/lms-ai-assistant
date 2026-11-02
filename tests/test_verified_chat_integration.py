@@ -36,6 +36,7 @@ def runtime(tmp_path,monkeypatch):
              "chunks":[{"chunk_id":"real-node","content":path.read_text(encoding="utf-8")} ]}
         indexed[kb]=raw; return raw
     adapter.publish.side_effect=publish; adapter.retrieve.side_effect=lambda kb,q,**kwargs:indexed[kb]
+    adapter.manifest.side_effect=lambda kb,**kwargs:indexed[kb]
     config=DeepTutorConfig(tmp_path,tmp_path/"engine",tmp_path/"cli",tmp_path/"runtime")
     publications=VerifiedPublicationService(config,adapter)
     scope=AuthorizedCourseScope(9,"INT1339","int1339-python","owner","https://moodle.test")
